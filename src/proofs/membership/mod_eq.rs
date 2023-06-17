@@ -50,13 +50,17 @@ fn challenge<E: Pairing>(
     let mut v_q = vec![0; l * 2];
     let (x, y) = c_e_q.xy().unwrap();
     x.serialize_uncompressed(&mut v_q[..l]).unwrap();
+    v_q[..l].reverse();
     y.serialize_uncompressed(&mut v_q[l..]).unwrap();
+    v_q[l..].reverse();
     let mut v_1 = α_1.to_bytes_be();
     v_1.resize(λ_n / 8, 0);
     let mut v_2 = vec![0; l * 2];
     let (x, y) = α_2.xy().unwrap();
     x.serialize_uncompressed(&mut v_2[..l]).unwrap();
+    v_2[..l].reverse();
     y.serialize_uncompressed(&mut v_2[l..]).unwrap();
+    v_2[l..].reverse();
 
     BigUint::from_bytes_be(&Sha256::digest([v_n, v_q, v_1, v_2].concat()))
         % (BigUint::one() << λ_s)
@@ -114,6 +118,7 @@ pub fn verify<E: Pairing>(pp: &Params<E>, s: &Statement<E>, π: &Proof<E>) -> bo
     let s_e_n = E::ScalarField::from(s_e_n);
 
     let c_n = challenge::<E>(c_e_n, c_e_q, α_1, α_2);
+    println!("{}", c_n);
     let c_q = E::ScalarField::from(c_n.clone());
     let c_n: &BigInt = &c_n.into();
 
@@ -126,6 +131,8 @@ pub fn verify<E: Pairing>(pp: &Params<E>, s: &Statement<E>, π: &Proof<E>) -> bo
 mod tests {
     use ark_bn254::{Bn254, Fr};
     use ark_ff::UniformRand;
+
+    use crate::utils::ToTransaction;
 
     use super::*;
 
@@ -152,5 +159,22 @@ mod tests {
         let π = prove(pp, &s, w);
 
         assert!(verify(pp, &s, &π));
+
+        println!("{}", pp.r.n.to_tx());
+        println!("{}", pp.r.g.to_tx());
+        println!("{}", pp.r.h.to_tx());
+        println!("{}", pp.c.g.to_tx());
+        println!("{}", pp.c.h.to_tx());
+        println!("{}", λ_s);
+
+        println!("{}", vec![
+            c_e_n.to_tx(),
+            c_e_q.to_tx(),
+            π.s_e.to_tx(),
+            π.s_r_n.to_tx(),
+            π.s_r_q.to_tx(),
+            π.α_1.to_tx(),
+            π.α_2.to_tx(),
+        ].join(","));
     }
 }

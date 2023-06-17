@@ -32,7 +32,10 @@ pub struct Circuit<'a, E: Pairing> {
 }
 
 impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for Circuit<'a, E> {
-    fn generate_constraints(self, cs: ConstraintSystemRef<E::ScalarField>) -> Result<(), SynthesisError> {
+    fn generate_constraints(
+        self,
+        cs: ConstraintSystemRef<E::ScalarField>,
+    ) -> Result<(), SynthesisError> {
         let Self { s, w, .. } = self;
         let Statement { l, u } = s;
         let Witness { v } = w;
@@ -56,9 +59,12 @@ mod tests {
     use rand::{thread_rng, Rng};
 
     use super::*;
-    use crate::lego::{
-        create_random_proof_incl_cp_link, generate_random_parameters_incl_cp_link,
-        prepare_verifying_key, verify_proof_incl_cp_link,
+    use crate::{
+        lego::{
+            create_random_proof_incl_cp_link, generate_random_parameters_incl_cp_link,
+            prepare_verifying_key, verify_proof_incl_cp_link,
+        },
+        utils::{OnChainVerifiable, ToTransaction},
     };
 
     #[test]
@@ -100,7 +106,25 @@ mod tests {
         )
         .unwrap();
 
-        assert!(verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &public_input).unwrap());
+        println!("{}", proof_link.compressed_size());
+
+        assert!(verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &public_input)
+            .unwrap());
+
+        println!("{}", params_link.vk.to_on_chain_verifier("Range"));
+        println!(
+            "{}",
+            vec![
+                proof_link.groth16_proof.a.to_tx(),
+                proof_link.groth16_proof.b.to_tx(),
+                proof_link.groth16_proof.c.to_tx(),
+                vec![proof_link.link_d, vec![proof_link.groth16_proof.d], vec![proof_link.link_pi]]
+                    .concat()
+                    .to_tx(),
+                public_input.to_tx()
+            ]
+            .join(",")
+        );
     }
 
     #[bench]

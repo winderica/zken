@@ -3,8 +3,7 @@ use std::ops::Mul;
 use super::{
     link::{PESubspaceSnark, SubspaceSnark},
     r1cs_to_qap::LibsnarkReduction,
-    Proof, ProofWithLink, ProvingKey, ProvingKeyCommon, ProvingKeyWithLink, VerifyingKey,
-    VerifyingKeyWithLink,
+    Proof, ProofWithLink, ProvingKeyCommon, ProvingKeyWithLink, VerifyingKey,
 };
 use ark_ec::{pairing::Pairing, VariableBaseMSM, AffineRepr, CurveGroup, Group};
 use ark_ff::{PrimeField, UniformRand, Zero};
@@ -16,7 +15,6 @@ use ark_std::rand::Rng;
 use ark_std::{cfg_into_iter, cfg_iter, end_timer, start_timer, vec, vec::Vec};
 
 use super::r1cs_to_qap::R1CStoQAP;
-use ark_std::ops::AddAssign;
 use rayon::prelude::*;
 
 /// Same as `create_random_proof` but returns the CP_link and its corresponding proof as well. `link_v`
@@ -40,26 +38,6 @@ where
     create_proof_incl_cp_link::<E, C>(circuit, pk, r, s, v, link_v)
 }
 
-/// Create a LegoGroth16 proof that is zero-knowledge. `v` is the blinding used in the commitment to the witness.
-/// This method samples randomness for zero knowledge via `rng`.
-#[inline]
-pub fn create_random_proof<E, C, R>(
-    circuit: C,
-    v: E::ScalarField,
-    pk: &ProvingKey<E>,
-    rng: &mut R,
-) -> Result<Proof<E>, SynthesisError>
-where
-    E: Pairing,
-    C: ConstraintSynthesizer<E::ScalarField>,
-    R: Rng,
-{
-    let r = E::ScalarField::rand(rng);
-    let s = E::ScalarField::rand(rng);
-
-    create_proof::<E, C>(circuit, pk, r, s, v)
-}
-
 #[inline]
 /// Create a LegoGroth16 proof using randomness `r`, `s`, `v` and `link_v` where `v` is the blinding in
 /// the witness commitment in proof and `link_v` is the blinding in the witness commitment in CP_link
@@ -78,23 +56,6 @@ where
     create_proof_incl_cp_link_with_reduction::<E, C, LibsnarkReduction>(
         circuit, pk, r, s, v, link_v,
     )
-}
-
-#[inline]
-/// Create a LegoGroth16 proof using randomness `r`, `s` and `v` where `v` is the blinding in the witness
-/// commitment in proof.
-pub fn create_proof<E, C>(
-    circuit: C,
-    pk: &ProvingKey<E>,
-    r: E::ScalarField,
-    s: E::ScalarField,
-    v: E::ScalarField,
-) -> Result<Proof<E>, SynthesisError>
-where
-    E: Pairing,
-    C: ConstraintSynthesizer<E::ScalarField>,
-{
-    create_proof_with_reduction::<E, C, LibsnarkReduction>(circuit, pk, r, s, v)
 }
 
 /// Create a LegoGroth16 proof using randomness `r` and `s`.
@@ -123,43 +84,6 @@ where
         s,
         v,
         link_v,
-        &h,
-        &prover.instance_assignment,
-        &prover.witness_assignment,
-    )?;
-
-    drop(prover);
-    drop(cs);
-
-    end_timer!(prover_time);
-
-    Ok(proof)
-}
-
-/// Create a LegoGroth16 proof using randomness `r` and `s`.
-/// `v` is the randomness of the commitment `proof.d`.
-#[inline]
-pub fn create_proof_with_reduction<E, C, QAP>(
-    circuit: C,
-    pk: &ProvingKey<E>,
-    r: E::ScalarField,
-    s: E::ScalarField,
-    v: E::ScalarField,
-) -> Result<Proof<E>, SynthesisError>
-where
-    E: Pairing,
-    C: ConstraintSynthesizer<E::ScalarField>,
-    QAP: R1CStoQAP,
-{
-    let prover_time = start_timer!(|| "Groth16::Prover");
-    let (cs, h) = synthesize_circuit::<E, C, QAP>(circuit)?;
-
-    let prover = cs.borrow().unwrap();
-    let proof = create_proof_with_assignment::<E, QAP>(
-        pk,
-        r,
-        s,
-        v,
         &h,
         &prover.instance_assignment,
         &prover.witness_assignment,
@@ -218,35 +142,6 @@ where
         link_d: g_d_link,
         link_pi,
     })
-}
-
-/// Create the proof given the public and private input assignments
-#[inline]
-fn create_proof_with_assignment<E, QAP>(
-    pk: &ProvingKey<E>,
-    r: E::ScalarField,
-    s: E::ScalarField,
-    v: E::ScalarField,
-    h: &[E::ScalarField],
-    input_assignment: &[E::ScalarField],
-    witness_assignment: &[E::ScalarField],
-) -> Result<Proof<E>, SynthesisError>
-where
-    E: Pairing,
-    QAP: R1CStoQAP,
-{
-    let (proof, _comm_wits) = create_proof_and_committed_witnesses_with_assignment::<E, QAP>(
-        &pk.common,
-        &pk.vk,
-        r,
-        s,
-        v,
-        &h,
-        input_assignment,
-        witness_assignment,
-    )?;
-    drop(_comm_wits);
-    Ok(proof)
 }
 
 /// Returns the proof and the committed witnesses.
@@ -361,70 +256,6 @@ where
         },
         committed_witnesses,
     ))
-}
-
-/// Check the opening of cp_link.
-pub fn verify_link_commitment<E: Pairing>(
-    cp_link_bases: &(E::G1Affine, E::G1Affine),
-    link_d: &[E::G1Affine],
-    witnesses_expected_in_commitment: &[E::ScalarField],
-    link_v: &[E::ScalarField],
-) -> bool {
-    for ((d, v), w) in link_d.iter().zip(link_v).zip(witnesses_expected_in_commitment) {
-        let d_expected = cp_link_bases.0.mul(*w) + &cp_link_bases.1.mul(*v);
-        if d != &d_expected.into_affine() {
-            return false;
-        }
-    }
-    true
-}
-
-/// Check that the commitments in the proof open to the public inputs and the witnesses but with different
-/// bases and randomness. This function is only called by the prover, the verifier does not
-/// know `witnesses_expected_in_commitment` or `link_v`.
-pub fn verify_commitments<E: Pairing>(
-    vk: &VerifyingKeyWithLink<E>,
-    proof: &ProofWithLink<E>,
-    public_inputs_count: usize,
-    witnesses_expected_in_commitment: &[E::ScalarField],
-    v: &E::ScalarField,
-    link_v: &[E::ScalarField],
-) -> bool {
-    verify_link_commitment::<E>(
-        &vk.link_bases,
-        &proof.link_d,
-        witnesses_expected_in_commitment,
-        link_v,
-    ) && verify_witness_commitment::<E>(
-        &vk.groth16_vk,
-        &proof.groth16_proof,
-        public_inputs_count,
-        witnesses_expected_in_commitment,
-        v,
-    )
-}
-
-/// Given the proof, verify that the commitment in it (`proof.d`) commits to the witness.
-pub fn verify_witness_commitment<E: Pairing>(
-    vk: &VerifyingKey<E>,
-    proof: &Proof<E>,
-    public_inputs_count: usize,
-    witnesses_expected_in_commitment: &[E::ScalarField],
-    v: &E::ScalarField,
-) -> bool {
-    // Some witnesses are also committed in `proof.d` with randomness `v`
-    let committed = cfg_iter!(witnesses_expected_in_commitment)
-        .map(|p| p.into_bigint())
-        .collect::<Vec<_>>();
-
-    // Check that proof.d is correctly constructed.
-    let mut d = E::G1::msm_bigint(
-        &vk.gamma_abc_g1[1 + public_inputs_count..1 + public_inputs_count + committed.len()],
-        &committed,
-    );
-    d.add_assign(&vk.eta_gamma_inv_g1.mul_bigint(v.into_bigint()));
-
-    proof.d == d.into_affine()
 }
 
 /// Given a circuit, generate its constraints and the corresponding QAP witness.

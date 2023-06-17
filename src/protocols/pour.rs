@@ -1,6 +1,6 @@
 use std::ops::Mul;
 
-use ark_ec::{pairing::Pairing, CurveGroup};
+use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, PrimeField, UniformRand};
 use ark_relations::r1cs::SynthesisError;
 use num::{bigint::RandBigInt, BigUint};
@@ -14,11 +14,9 @@ use crate::{
     },
     primitives::{
         accumulator::IntegerCommitment,
-        poseidon::{Encryption, CRH},
-        secp256k1::{PublicKey, SecretKey, SECP256K1},
+        poseidon::{Encryption, HField},
     },
-    proofs::{pt_form, sn_form, recv, membership::mem},
-    utils::ToVecF,
+    proofs::{membership::mem, pt_form, recv, sn_form},
 };
 
 pub struct Statement<E: Pairing> {
@@ -44,41 +42,42 @@ impl Pour {
         rng: &mut R,
         a_pt: BigUint,
         w_pt: BigUint,
-        ask_s: SecretKey,
+        ask_s: ark_secp256k1::Fr,
         st_s: SecretToken<E::ScalarField>,
         pt_s: E::ScalarField,
-        apk_r: PublicKey,
+        apk_r: ark_secp256k1::Affine,
     ) -> Result<(SecretToken<E::ScalarField>, Statement<E>, Proof<E>), SynthesisError> {
         let pt_s_bn: BigUint = pt_s.into();
-        let SecretToken { v, rho_sn: rho_sn_s, rho_pt: rho_pt_s, aux_pt: aux_pt_s } = st_s;
-        let rho_sn_r = E::ScalarField::rand(rng);
+        let SecretToken { v, rho_pt: rho_pt_s, aux_pt: aux_pt_s } = st_s;
         let rho_pt_r = E::ScalarField::rand(rng);
         let nonce = E::ScalarField::rand(rng);
 
-        let (pt_r, aux_pt_r) = TK::pt_gen(pp, &apk_r, v, rho_sn_r, rho_pt_r);
-        let (esk_s, epk_s) = SECP256K1.generate_keypair(rng);
+        let (pt_r, aux_pt_r) = TK::pt_gen(pp, apk_r.hash_to_field(&pp.h), v, rho_pt_r);
+        let esk_s = ark_secp256k1::Fr::rand(rng);
+        let epk_s = (ark_secp256k1::Affine::generator() * esk_s).into_affine();
 
-        let dk = apk_r.mul_tweak(SECP256K1, &esk_s.into()).unwrap();
-        let dk = CRH::hash_vec(&pp.h, &dk.to_vec_f(128));
+        let dk = (apk_r * esk_s).hash_to_field(&pp.h);
         let extra = Encryption::encrypt(
             &pp.h,
             vec![
                 v,
-                rho_sn_r,
                 rho_pt_r,
-                E::ScalarField::from_bigint(<E::ScalarField as PrimeField>::BigInt::from_bits_le(&aux_pt_r.concat())).unwrap(),
+                E::ScalarField::from_bigint(<E::ScalarField as PrimeField>::BigInt::from_bits_le(
+                    &aux_pt_r.concat(),
+                ))
+                .unwrap(),
             ],
             dk,
             nonce,
         );
-        let sn_s = SN::sn_gen(pp, &ask_s, rho_sn_s);
+        let sn_s = SN::sn_gen(pp, &ask_s, pt_s);
+
+        let h_apk_s = (ark_secp256k1::Affine::generator() * ask_s).hash_to_field(&pp.h);
 
         let r_v = E::ScalarField::rand(rng);
         let r_pt_s = E::ScalarField::rand(rng);
         let r_sn_s = E::ScalarField::rand(rng);
-        let r_sk0_s = E::ScalarField::rand(rng);
-        let r_sk1_s = E::ScalarField::rand(rng);
-        let r_rho_sn_s = E::ScalarField::rand(rng);
+        let r_h_apk_s = E::ScalarField::rand(rng);
 
         let pi_pt_form = create_random_proof_incl_cp_link(
             pt_form::Circuit {
@@ -86,14 +85,13 @@ impl Pour {
                 w: pt_form::Witness {
                     pt: pt_s,
                     v,
-                    ask: ask_s,
-                    rho_sn: rho_sn_s,
+                    h_apk: h_apk_s,
                     rho_pt: rho_pt_s,
                     aux_pt: aux_pt_s,
                 },
             },
             E::ScalarField::rand(rng),
-            &[r_v, r_pt_s, r_sk0_s, r_sk1_s, r_rho_sn_s],
+            &[r_v, r_pt_s, r_h_apk_s],
             &crs.pt_form,
             rng,
         )?;
@@ -101,14 +99,10 @@ impl Pour {
         let pi_sn_form = create_random_proof_incl_cp_link(
             sn_form::Circuit {
                 pp,
-                w: sn_form::Witness {
-                    sn: sn_s,
-                    ask: ask_s,
-                    rho_sn: rho_sn_s,
-                },
+                w: sn_form::Witness { sn: sn_s, ask: ask_s, pt: pt_s, h_apk: h_apk_s },
             },
             E::ScalarField::rand(rng),
-            &[r_sn_s, r_sk0_s, r_sk1_s, r_rho_sn_s],
+            &[r_sn_s, r_pt_s, r_h_apk_s],
             &crs.sn_form,
             rng,
         )?;
@@ -118,14 +112,7 @@ impl Pour {
             recv::Circuit {
                 pp,
                 s: s_recv.clone(),
-                w: recv::Witness {
-                    v,
-                    apk_r,
-                    rho_sn_r,
-                    rho_pt_r,
-                    aux_pt_r: aux_pt_r.clone(),
-                    esk_s,
-                },
+                w: recv::Witness { v, apk_r, rho_pt_r, aux_pt_r: aux_pt_r.clone(), esk_s },
             },
             E::ScalarField::rand(rng),
             &[r_v],
@@ -144,14 +131,9 @@ impl Pour {
         );
 
         Ok((
-            SecretToken { v, rho_sn: rho_sn_r, rho_pt: rho_pt_r, aux_pt: aux_pt_r },
+            SecretToken { v, rho_pt: rho_pt_r, aux_pt: aux_pt_r },
             Statement { mem: s_mem, recv: s_recv, sn_s, r_sn_s },
-            Proof {
-                mem: pi_mem,
-                sn_form: pi_sn_form,
-                pt_form: pi_pt_form,
-                recv: pi_recv,
-            },
+            Proof { mem: pi_mem, sn_form: pi_sn_form, pt_form: pi_pt_form, recv: pi_recv },
         ))
     }
 
@@ -181,11 +163,10 @@ impl Pour {
                 &s.recv.inputize(),
             )?
             && s.mem.c_e_q == pi.pt_form.link_d[1]
-            && pi.pt_form.link_d[2] == pi.sn_form.link_d[1]
-            && pi.pt_form.link_d[3] == pi.sn_form.link_d[2]
-            && pi.pt_form.link_d[4] == pi.sn_form.link_d[3]
             && pi.pt_form.link_d[0] == pi.recv.link_d[0]
-            && (pp.c.g.mul(s.sn_s) + pp.c.h.mul(s.r_sn_s)).into_affine() == pi.sn_form.link_d[0])
+            && pi.pt_form.link_d[1] == pi.sn_form.link_d[1]
+            && pi.pt_form.link_d[2] == pi.sn_form.link_d[2]
+            && pp.c.g.mul(s.sn_s) + pp.c.h.mul(s.r_sn_s) == pi.sn_form.link_d[0].into())
     }
 }
 
@@ -194,6 +175,7 @@ mod tests {
     use std::error::Error;
 
     use ark_bn254::{Bn254, Fr};
+    use ark_ec::AffineRepr;
     use ark_ff::UniformRand;
     use rand::thread_rng;
 
@@ -210,8 +192,9 @@ mod tests {
         let v = Fr::rand(rng);
 
         let w_pt = rng.gen_biguint_below(&pp.r.n);
-        let (ask_s, apk_s) = secp256k1::Secp256k1::new().generate_keypair(rng);
-        let (_, apk_r) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask_s = ark_secp256k1::Fr::rand(rng);
+        let apk_s = (ark_secp256k1::Affine::generator() * ask_s).into_affine();
+        let apk_r = ark_secp256k1::Affine::rand(rng);
         let (st_s, pt_s) = mint(pp, rng, &apk_s, v);
         let a_pt = Accumulator::acc(&pp.r, &w_pt, &pt_s.into());
 

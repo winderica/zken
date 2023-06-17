@@ -205,6 +205,7 @@ mod tests {
     use num_prime::RandPrime;
 
     use super::*;
+    use crate::utils::ToTransaction;
 
     #[test]
     fn test() {
@@ -227,5 +228,26 @@ mod tests {
 
         let π = prove(pp, &s, w);
         assert!(verify(pp, &s, &π));
+
+        println!("{}", pp.r.n.to_tx());
+        println!("{}", pp.r.g.to_tx());
+        println!("{}", pp.r.h.to_tx());
+        println!("{}", λ_z + λ_s + μ + 1);
+        println!("{}", λ_s);
+
+        println!(
+            "{}",
+            vec![
+                a.to_tx(),
+                c_e.to_tx(),
+                π.c_a.to_tx(),
+                π.c_r_a.to_tx(),
+                π.c_b.to_tx(),
+                π.c_ρ_b.to_tx(),
+                [π.s_b, π.s_e, π.s_ρ_b, π.s_r, π.s_r_a, π.s_rr_a, π.s_ρρ_b, π.s_β, π.s_δ,].to_tx(),
+                [π.α_2, π.α_3, π.α_4, π.α_5, π.α_6, π.α_7,].to_tx(),
+            ]
+            .join(",")
+        );
     }
 }

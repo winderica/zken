@@ -50,7 +50,7 @@ pub fn verify<E: Pairing>(pp: &Params<E>, s: &Statement<E>, π: &Proof<E>) -> bo
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Mul;
+    use std::{ops::Mul, time::Instant};
 
     use ark_bn254::{Bn254, Fr};
     use ark_ec::CurveGroup;
@@ -68,11 +68,11 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let w_mem = rng.gen_biguint(123);
-        let w_nonmem = rng.gen_biguint(456);
-        let e: BigUint = rng.gen_prime(123, None);
+        let w_mem = rng.gen_biguint_below(&pp.r.n);
+        let w_nonmem = rng.gen_biguint_below(&pp.r.n);
+        let e: BigUint = rng.gen_prime(256, None);
         let r_q = Fr::rand(rng);
-        let r_n = rng.gen_bigint(123);
+        let r_n = rng.gen_biguint_below(&pp.r.n).into();
 
         let a_mem = w_mem.mod_exp(&e, &pp.r.n);
         let a_nonmem = pp.r.g.mod_exp(&w_nonmem, &pp.r.n);
@@ -85,7 +85,12 @@ mod tests {
         let w =
             Witness { w_mem, w_nonmem, r_n, e: e.into(), r_q: Into::<BigUint>::into(r_q).into() };
 
+        let now = Instant::now();
         let π = prove(pp, &s, &w);
+        println!("{:?}", now.elapsed());
+
+        let now = Instant::now();
         assert!(verify(pp, &s, &π));
+        println!("{:?}", now.elapsed());
     }
 }

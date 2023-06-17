@@ -39,58 +39,6 @@ where
     )
 }
 
-#[inline]
-/// Generates a random common reference string for a circuit.
-/// `commit_witness_count` is the number of witnesses committed in proof
-pub fn generate_random_parameters<E, C, R>(
-    circuit: C,
-    commit_witness_count: usize,
-    rng: &mut R,
-) -> Result<ProvingKey<E>, SynthesisError>
-where
-    E: Pairing,
-    C: ConstraintSynthesizer<E::ScalarField>,
-    R: Rng,
-{
-    generate_random_parameters_with_reduction::<E, C, R, LibsnarkReduction>(
-        circuit,
-        commit_witness_count,
-        rng,
-    )
-}
-
-/// Generates a random common reference string for
-/// a circuit.
-/// `commit_witness_count` is the number of witnesses committed in proof
-#[inline]
-pub fn generate_random_parameters_with_reduction<E, C, R, QAP>(
-    circuit: C,
-    commit_witness_count: usize,
-    rng: &mut R,
-) -> Result<ProvingKey<E>, SynthesisError>
-where
-    E: Pairing,
-    C: ConstraintSynthesizer<E::ScalarField>,
-    R: Rng,
-    QAP: R1CStoQAP,
-{
-    let (alpha, beta, gamma, delta, eta, g1_generator, g2_generator) =
-        generate_randomness::<E, R>(rng);
-
-    generate_parameters_with_qap::<E, C, R, QAP>(
-        circuit,
-        alpha,
-        beta,
-        gamma,
-        delta,
-        eta,
-        g1_generator,
-        g2_generator,
-        commit_witness_count,
-        rng,
-    )
-}
-
 /// Generates a random common reference string for a circuit.
 /// `link_gens` are the bases (commitment key) for link (Pedersen) commitment to the first
 /// `commit_witness_count` witnesses committed in CP_link as well as in proof
@@ -198,41 +146,6 @@ where
     };
 
     Ok(ProvingKeyWithLink { vk, common: groth16_pk.common, link_ek })
-}
-
-/// Create parameters for a circuit, given some toxic waste, R1CS to QAP calculator and group generators
-#[inline]
-pub fn generate_parameters_with_qap<E, C, R, QAP>(
-    circuit: C,
-    alpha: E::ScalarField,
-    beta: E::ScalarField,
-    gamma: E::ScalarField,
-    delta: E::ScalarField,
-    eta: E::ScalarField,
-    g1_generator: E::G1,
-    g2_generator: E::G2,
-    commit_witness_count: usize,
-    rng: &mut R,
-) -> Result<ProvingKey<E>, SynthesisError>
-where
-    E: Pairing,
-    C: ConstraintSynthesizer<E::ScalarField>,
-    R: Rng,
-    QAP: R1CStoQAP,
-{
-    let (pk, _) = generate_parameters_and_extra_info_with_qap::<E, C, R, QAP>(
-        circuit,
-        alpha,
-        beta,
-        gamma,
-        delta,
-        eta,
-        g1_generator,
-        g2_generator,
-        commit_witness_count,
-        rng,
-    )?;
-    Ok(pk)
 }
 
 /// Create parameters for a circuit, given some toxic waste, R1CS to QAP calculator and group generators.

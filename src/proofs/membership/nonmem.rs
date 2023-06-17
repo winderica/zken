@@ -44,9 +44,9 @@ pub fn verify<E: Pairing>(pp: &Params<E>, s: &Statement<E>, π: &Proof<E>) -> bo
 mod tests {
     use std::ops::Mul;
 
-    use ark_bn254::{Bn254, Fr};
+    use ark_bn254::{Bn254, Fq, Fr};
     use ark_ec::CurveGroup;
-    use ark_ff::UniformRand;
+    use ark_ff::{PrimeField, UniformRand};
     use num::bigint::RandBigInt;
     use num_prime::RandPrime;
     use rand::thread_rng;
@@ -60,10 +60,10 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let w = rng.gen_biguint(456);
-        let e: BigUint = rng.gen_prime(123, None);
+        let w = rng.gen_biguint_below(&pp.r.n);
+        let e: BigUint = rng.gen_prime(256, None);
         let r_q = Fr::rand(rng);
-        let r_n = rng.gen_bigint(123);
+        let r_n = rng.gen_biguint_below(&pp.r.n).into();
 
         let a = pp.r.g.mod_exp(&w, &pp.r.n);
 
@@ -75,6 +75,36 @@ mod tests {
         let w = Witness { w, r_n, e: e.into(), r_q: Into::<BigUint>::into(r_q).into() };
 
         let π = prove(pp, &s, &w);
+
+        println!(
+            "{}",
+            (π.0.c_a.bits()
+                + π.0.c_r_a.bits()
+                + π.0.c_b.bits()
+                + π.0.c_ρ_b.bits()
+                + π.0.α_2.bits()
+                + π.0.α_3.bits()
+                + π.0.α_4.bits()
+                + π.0.α_5.bits()
+                + π.0.α_6.bits()
+                + π.0.α_7.bits()
+                + π.0.s_b.bits()
+                + π.0.s_e.bits()
+                + π.0.s_ρ_b.bits()
+                + π.0.s_r.bits()
+                + π.0.s_r_a.bits()
+                + π.0.s_rr_a.bits()
+                + π.0.s_ρρ_b.bits()
+                + π.0.s_β.bits()
+                + π.0.s_δ.bits()
+                + Fr::MODULUS_BIT_SIZE as u64
+                + π.1.s_e.bits()
+                + π.1.s_r_n.bits()
+                + π.1.α_1.bits()
+                + Fq::MODULUS_BIT_SIZE as u64)
+                / 8
+        );
+
         assert!(verify(pp, &s, &π));
     }
 }

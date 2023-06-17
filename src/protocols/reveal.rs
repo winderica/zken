@@ -1,4 +1,4 @@
-use ark_ec::pairing::Pairing;
+use ark_ec::{pairing::Pairing, AffineRepr};
 use ark_ff::UniformRand;
 use ark_relations::r1cs::SynthesisError;
 use num::{bigint::RandBigInt, BigUint};
@@ -10,11 +10,12 @@ use crate::{
         create_random_proof_incl_cp_link, prepare_verifying_key, verify_proof_incl_cp_link,
         ProofWithLink,
     },
-    primitives::{
-        accumulator::IntegerCommitment,
-        secp256k1::{PublicKey, SecretKey},
+    primitives::{accumulator::IntegerCommitment, poseidon::HField},
+    proofs::{
+        bind_id,
+        membership::{mem, mem_and_nonmem},
+        pt_form, range, sn_form, sn_range,
     },
-    proofs::{bind_id, pt_form, range, sn_form, sn_range, membership::{mem, mem_and_nonmem}},
 };
 
 pub struct Statement<E: Pairing> {
@@ -47,17 +48,18 @@ impl Reveal {
         w_h_range: BigUint,
         a_revoked_h_range: BigUint,
         w_revoked_h_range: BigUint,
-        ask: SecretKey,
+        ask: ark_secp256k1::Fr,
         st: SecretToken<E::ScalarField>,
         pt: E::ScalarField,
         sn_range: (E::ScalarField, E::ScalarField),
         bounds: (E::ScalarField, E::ScalarField),
-        wpk: PublicKey,
-        omega: SecretKey,
+        wpk: ark_secp256k1::Affine,
+        omega: ark_secp256k1::Fr,
     ) -> Result<(Statement<E>, Proof<E>), SynthesisError> {
-        let SecretToken { v, rho_sn, rho_pt, aux_pt } = st;
+        let SecretToken { v, rho_pt, aux_pt } = st;
 
-        let sn = SN::sn_gen(pp, &ask, rho_sn);
+        let sn = SN::sn_gen(pp, &ask, pt);
+        let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
         let (h_range, aux_h_range) = SNRange::h_range_gen(pp, sn_range);
         let pt_bn: BigUint = pt.into();
         let h_range_bn: BigUint = h_range.into();
@@ -65,23 +67,21 @@ impl Reveal {
         let r_v = E::ScalarField::rand(rng);
         let r_pt = E::ScalarField::rand(rng);
         let r_sn = E::ScalarField::rand(rng);
-        let r_sk0 = E::ScalarField::rand(rng);
-        let r_sk1 = E::ScalarField::rand(rng);
-        let r_rho_sn = E::ScalarField::rand(rng);
+        let r_h_apk = E::ScalarField::rand(rng);
         let r_h_range = E::ScalarField::rand(rng);
 
         let pi_pt_form = create_random_proof_incl_cp_link(
-            pt_form::Circuit { pp, w: pt_form::Witness { pt, v, ask, rho_sn, rho_pt, aux_pt } },
+            pt_form::Circuit { pp, w: pt_form::Witness { pt, v, h_apk, rho_pt, aux_pt } },
             E::ScalarField::rand(rng),
-            &[r_v, r_pt, r_sk0, r_sk1, r_rho_sn],
+            &[r_v, r_pt, r_h_apk],
             &crs.pt_form,
             rng,
         )?;
 
         let pi_sn_form = create_random_proof_incl_cp_link(
-            sn_form::Circuit { pp, w: sn_form::Witness { sn, ask, rho_sn } },
+            sn_form::Circuit { pp, w: sn_form::Witness { sn, ask, pt, h_apk } },
             E::ScalarField::rand(rng),
-            &[r_sn, r_sk0, r_sk1, r_rho_sn],
+            &[r_sn, r_pt, r_h_apk],
             &crs.sn_form,
             rng,
         )?;
@@ -108,9 +108,13 @@ impl Reveal {
 
         let s_bind_id = bind_id::Statement { wpk };
         let pi_bind_id = create_random_proof_incl_cp_link(
-            bind_id::Circuit { pp, s: s_bind_id.clone(), w: bind_id::Witness { ask, omega } },
+            bind_id::Circuit {
+                pp,
+                s: s_bind_id.clone(),
+                w: bind_id::Witness { h_apk, delta: omega },
+            },
             E::ScalarField::rand(rng),
-            &[r_sk0, r_sk1],
+            &[r_h_apk],
             &crs.bind_id,
             rng,
         )?;
@@ -128,7 +132,12 @@ impl Reveal {
         let rr_h_range = rng.gen_biguint_below(&pp.r.n);
         let cc_h_range = IntegerCommitment::commit(&pp.r, &h_range_bn, &rr_h_range);
 
-        let s_mem_and_nonmem_h_range = mem_and_nonmem::Statement { c_e_n: cc_h_range, c_e_q: pi_sn_range.link_d[1], a_mem: a_h_range, a_nonmem: a_revoked_h_range };
+        let s_mem_and_nonmem_h_range = mem_and_nonmem::Statement {
+            c_e_n: cc_h_range,
+            c_e_q: pi_sn_range.link_d[1],
+            a_mem: a_h_range,
+            a_nonmem: a_revoked_h_range,
+        };
         let pi_mem_and_nonmem_h_range = mem_and_nonmem::prove(
             pp,
             &s_mem_and_nonmem_h_range,
@@ -200,12 +209,10 @@ impl Reveal {
             )?
             && s.pt_minted.c_e_q == pi.pt_form.link_d[1]
             && s.sn_not_spent.c_e_q == pi.sn_range.link_d[1]
-            && pi.pt_form.link_d[2] == pi.sn_form.link_d[1]
-            && pi.pt_form.link_d[3] == pi.sn_form.link_d[2]
-            && pi.pt_form.link_d[4] == pi.sn_form.link_d[3]
             && pi.pt_form.link_d[0] == pi.range.link_d[0]
+            && pi.pt_form.link_d[1] == pi.sn_form.link_d[1]
+            && pi.pt_form.link_d[2] == pi.sn_form.link_d[2]
             && pi.pt_form.link_d[2] == pi.bind_id.link_d[0]
-            && pi.pt_form.link_d[3] == pi.bind_id.link_d[1]
             && pi.sn_form.link_d[0] == pi.sn_range.link_d[0])
     }
 }
@@ -215,9 +222,9 @@ mod tests {
     use std::error::Error;
 
     use ark_bn254::{Bn254, Fr};
+    use ark_ec::{AffineRepr, CurveGroup};
     use ark_ff::PrimeField;
     use rand::thread_rng;
-    use secp256k1::SECP256K1;
 
     use super::*;
     use crate::{primitives::accumulator::Accumulator, protocols::mint::mint};
@@ -242,13 +249,15 @@ mod tests {
         let w_h_range = rng.gen_biguint_below(&pp.r.n);
         let w_revoked_h_range = rng.gen_biguint_below(&pp.r.n);
 
-        let (wsk, wpk) = SECP256K1.generate_keypair(rng);
-        let omega = SecretKey::new(rng);
-        let ask = wsk.add_tweak(&omega.into())?;
-        let apk = ask.public_key(SECP256K1);
+        let wsk = ark_secp256k1::Fr::rand(rng);
+        let wpk = (ark_secp256k1::Affine::generator() * wsk).into_affine();
+        let omega = ark_secp256k1::Fr::rand(rng);
+        let ask = wsk + omega;
+        let apk = (ark_secp256k1::Affine::generator() * ask).into_affine();
+
         let (st, pt) = mint(pp, rng, &apk, v);
         let a_pt = Accumulator::acc(&pp.r, &w_pt, &pt.into());
-        let sn = SN::sn_gen(pp, &ask, st.rho_sn);
+        let sn = SN::sn_gen(pp, &ask, pt);
 
         let sn_lb = rng.gen_biguint_below(&sn.into()).into();
         let sn_ub = rng.gen_biguint_range(&sn.into(), &Fr::MODULUS_MINUS_ONE_DIV_TWO.into()).into();

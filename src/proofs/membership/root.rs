@@ -131,6 +131,8 @@ pub fn verify<E: Pairing>(pp: &Params<E>, s: &Statement, π: &Proof) -> bool {
 mod tests {
     use ark_bn254::Bn254;
 
+    use crate::utils::ToTransaction;
+
     use super::*;
 
     #[test]
@@ -153,5 +155,23 @@ mod tests {
 
         let π = prove(pp, &s, w);
         assert!(verify(pp, &s, &π));
+
+        println!("{}", pp.r.n.to_tx());
+        println!("{}", pp.r.g.to_tx());
+        println!("{}", pp.r.h.to_tx());
+        println!("{}", λ_z + λ_s + μ + 1);
+        println!("{}", λ_s);
+
+        println!("{}", vec![
+            a.to_tx(),
+            c_e.to_tx(),
+            π.c_r.to_tx(),
+            π.c_w.to_tx(),
+            π.s_e.to_tx(),
+            [π.s_r, π.s_r_2, π.s_r_3].to_tx(),
+            π.s_β.to_tx(),
+            π.s_δ.to_tx(),
+            [π.α_1, π.α_2, π.α_3, π.α_4].to_tx(),
+        ].join(","));
     }
 }

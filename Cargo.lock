@@ -65,9 +65,9 @@ dependencies = [
 
 [[package]]
 name = "ark-bn254"
-version = "0.4.0-alpha.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90becd4a0d80f8699a0cdbd56fb2853061c84b0f4a6170b71097c88499fbbda7"
+checksum = "a22f4561524cd949590d78d7d4c5df8f592430d221f7f3c9497bbafd8972120f"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -96,9 +96,9 @@ dependencies = [
 
 [[package]]
 name = "ark-ec"
-version = "0.4.0-alpha.7"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35d91035f4e665530be6046670d6861b563ad51042ddba2c374537ce3e78cd49"
+checksum = "defd9a439d56ac24968cca0571f598a61bc8c55f71d50a89cda591cb750670ba"
 dependencies = [
  "ark-ff",
  "ark-poly",
@@ -114,9 +114,9 @@ dependencies = [
 
 [[package]]
 name = "ark-ff"
-version = "0.4.0-alpha.7"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf4b42c978bd9b967f6a2ba54a4cc57f34780f9d0cf86916f8f7e922b4f80fe"
+checksum = "ec847af850f44ad29048935519032c33da8aa03340876d351dfab5660d2966ba"
 dependencies = [
  "ark-ff-asm",
  "ark-ff-macros",
@@ -135,9 +135,9 @@ dependencies = [
 
 [[package]]
 name = "ark-ff-asm"
-version = "0.4.0-alpha.7"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3ba0a3cf584a8ede533a1749b86040e9018cf752265fc39a71c69fe1fafaba5"
+checksum = "3ed4aa4fe255d0bc6d79373f7e31d2ea147bcf486cba1be5ba7ea85abdb92348"
 dependencies = [
  "quote",
  "syn",
@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "ark-ff-macros"
-version = "0.4.0-alpha.7"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9989a01ec42d2f31232796831077ef730d4cd0d0931f5ef6962a43ebddd215fa"
+checksum = "7abe79b0e4288889c4574159ab790824d0033b9fdcb2a112a3182fac2e514565"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -173,9 +173,9 @@ dependencies = [
 
 [[package]]
 name = "ark-poly"
-version = "0.4.0-alpha.7"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e081de372792fc268dcc0bb775cf553b873140b15a581e91842305aa3fdf20a7"
+checksum = "d320bfc44ee185d899ccbadfa8bc31aab923ce1558716e1997a1e74057fe86bf"
 dependencies = [
  "ark-ff",
  "ark-serialize",
@@ -187,9 +187,9 @@ dependencies = [
 
 [[package]]
 name = "ark-r1cs-std"
-version = "0.4.0-alpha.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccffa53ace7907d7b0e6852f5d1738daaadae44f1e7c75d0fb2aa4d26a0fa7a3"
+checksum = "de1d1472e5cb020cb3405ce2567c91c8d43f21b674aef37b0202f5c3304761db"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -204,9 +204,9 @@ dependencies = [
 
 [[package]]
 name = "ark-relations"
-version = "0.4.0-alpha.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8fcbb7957519f1fd4de397d22360b236840c3e426f39999e34c63be9dfe7d1b"
+checksum = "00796b6efc05a3f48225e59cb6a2cda78881e7c390872d5786aaf112f31fb4f0"
 dependencies = [
  "ark-ff",
  "ark-std",
@@ -215,10 +215,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "ark-serialize"
-version = "0.4.0-alpha.7"
+name = "ark-secp256k1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84aeb60f7c6792ae71e9e2225412ecd59d7c85cfec4183a8c497f2a3a4cdb36e"
+checksum = "4c02e954eaeb4ddb29613fee20840c2bbc85ca4396d53e33837e11905363c5f2"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-std",
+]
+
+[[package]]
+name = "ark-serialize"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb7b85a02b83d2f22f89bd5cac66c9c89474240cb6207cb1efc16d098e822a5"
 dependencies = [
  "ark-serialize-derive",
  "ark-std",
@@ -228,9 +239,9 @@ dependencies = [
 
 [[package]]
 name = "ark-serialize-derive"
-version = "0.4.0-alpha.7"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e1615bb8ceb28d2b5a8863f6fdce76932c91f2bb8d55bddc942906fbe8ece1d"
+checksum = "ae3281bc6d0fd7e549af32b52511e1302185bd688fd3359fa36423346ff682ea"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -266,9 +277,9 @@ dependencies = [
 
 [[package]]
 name = "ark-std"
-version = "0.4.0-alpha"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc5b16d734e9b2e43886ff586755219df7fb9639cc04ab00c7e636708a5ba06a"
+checksum = "94893f1e0c6eeab764ade8dc4c0db24caf4fe7cbbaafc0eba0a9030f447b5185"
 dependencies = [
  "colored",
  "num-traits",
@@ -2866,26 +2877,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "secp256k1"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff55dc09d460954e9ef2fa8a7ced735a964be9981fd50e870b2b3b0705e14964"
-dependencies = [
- "rand",
- "secp256k1-sys",
- "serde",
-]
-
-[[package]]
-name = "secp256k1-sys"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83080e2c2fc1006e625be82e5d1eb6a43b7fd9578b617fcc55814daf286bba4b"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3031,15 +3022,6 @@ checksum = "0a31480366ec990f395a61b7c08122d99bd40544fdb5abcfc1b06bb29994312c"
 dependencies = [
  "digest 0.10.5",
  "keccak",
-]
-
-[[package]]
-name = "signal-hook-registry"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e51e73328dc4ac0c7ccbda3a494dfa03df1de2f46018127f60c693f2648455b0"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -3298,9 +3280,7 @@ dependencies = [
  "mio",
  "num_cpus",
  "once_cell",
- "parking_lot 0.12.1",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "winapi",
@@ -3796,9 +3776,9 @@ dependencies = [
  "ark-poly",
  "ark-r1cs-std",
  "ark-relations",
+ "ark-secp256k1",
  "ark-serialize",
  "ark-std",
- "blake2 0.9.2",
  "ethers",
  "indoc",
  "num",
@@ -3806,7 +3786,6 @@ dependencies = [
  "num-prime",
  "rand",
  "rayon",
- "secp256k1",
  "seq-macro",
  "serde",
  "serde_json",

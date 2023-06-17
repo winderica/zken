@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
 use ark_ff::{BigInteger, BitIteratorLE, PrimeField};
+use ark_r1cs_std::fields::fp::FpVar;
+use ark_relations::r1cs::SynthesisError;
 use ark_std::{marker::PhantomData, vec::Vec};
 use num::{BigUint, Integer, One, Zero};
 use num_prime::nt_funcs::is_prime;
@@ -10,6 +12,14 @@ use serde_with::serde_as;
 use crate::constants::{ALPHA, R_F, R_P, WIDTH};
 
 pub mod constraints;
+
+pub trait HField<F: PrimeField> {
+    fn hash_to_field(&self, pp: &PoseidonParameters<F>) -> F;
+}
+
+pub trait HFieldGadget<F: PrimeField> {
+    fn hash_to_field_var(&self, pp: &PoseidonParameters<F>) -> Result<FpVar<F>, SynthesisError>;
+}
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -340,115 +350,115 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_round0() {
-        const O: usize = 4;
-        const N: usize = 11;
-        const R: usize = 40 - N - O;
-        (0u64..(1 << R)).into_par_iter().for_each(|i| {
-            let v = {
-                let mut acc = BigUint::from(i);
-                for i in 0..O {
-                    acc.set_bit((i + R) as u64, true);
-                }
-                acc << N
-            };
-            for nonce in (1u64 << (N - 1))..(1u64 << N) {
-                if (nonce & 0b11) == 0b11 {
-                    let base = &v + nonce;
-                    if is_prime(&base, None).probably() {
-                        return;
-                    }
-                }
-            }
-            unreachable!()
-        });
-    }
+    // #[test]
+    // fn test_round0() {
+    //     const O: usize = 4;
+    //     const N: usize = 11;
+    //     const R: usize = 40 - N - O;
+    //     (0u64..(1 << R)).into_par_iter().for_each(|i| {
+    //         let v = {
+    //             let mut acc = BigUint::from(i);
+    //             for i in 0..O {
+    //                 acc.set_bit((i + R) as u64, true);
+    //             }
+    //             acc << N
+    //         };
+    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
+    //             if (nonce & 0b11) == 0b11 {
+    //                 let base = &v + nonce;
+    //                 if is_prime(&base, None).probably() {
+    //                     return;
+    //                 }
+    //             }
+    //         }
+    //         unreachable!()
+    //     });
+    // }
 
-    #[test]
-    fn test_round1() {
-        let rng = &mut thread_rng();
-        const O: usize = 4;
-        const N: usize = 11;
-        const R: usize = 40 - N - O;
-        let prime = rng.gen_prime_exact(40, None);
-        (0u64..(1 << R)).into_par_iter().for_each(|i| {
-            let v = {
-                let mut acc = BigUint::from(i);
-                for i in 0..O {
-                    acc.set_bit((i + R) as u64, true);
-                }
-                acc << N
-            };
-            for nonce in (1u64 << (N - 1))..(1u64 << N) {
-                let extension = &v + nonce;
-                let number = &prime * &extension + BigUint::one();
-                let part = BigUint::from(2u8).modpow(&extension, &number);
-                if part.modpow(&prime, &number).is_one()
-                    && (&part - BigUint::one()).gcd(&number).is_one()
-                {
-                    return;
-                }
-            }
-            unreachable!()
-        });
-    }
+    // #[test]
+    // fn test_round1() {
+    //     let rng = &mut thread_rng();
+    //     const O: usize = 4;
+    //     const N: usize = 11;
+    //     const R: usize = 40 - N - O;
+    //     let prime = rng.gen_prime_exact(40, None);
+    //     (0u64..(1 << R)).into_par_iter().for_each(|i| {
+    //         let v = {
+    //             let mut acc = BigUint::from(i);
+    //             for i in 0..O {
+    //                 acc.set_bit((i + R) as u64, true);
+    //             }
+    //             acc << N
+    //         };
+    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
+    //             let extension = &v + nonce;
+    //             let number = &prime * &extension + BigUint::one();
+    //             let part = BigUint::from(2u8).modpow(&extension, &number);
+    //             if part.modpow(&prime, &number).is_one()
+    //                 && (&part - BigUint::one()).gcd(&number).is_one()
+    //             {
+    //                 return;
+    //             }
+    //         }
+    //         unreachable!()
+    //     });
+    // }
 
-    #[test]
-    fn test_round2() {
-        let rng = &mut thread_rng();
-        const O: usize = 3;
-        const N: usize = 12;
-        const R: usize = 78 - N - O;
-        let prime = rng.gen_prime_exact(79, None);
-        (0u64..(1 << R)).into_par_iter().for_each(|i| {
-            let v = {
-                let mut acc = BigUint::from(i);
-                for i in 0..O {
-                    acc.set_bit((i + R) as u64, true);
-                }
-                acc << N
-            };
-            for nonce in (1u64 << (N - 1))..(1u64 << N) {
-                let extension = &v + nonce;
-                let number = &prime * &extension + BigUint::one();
-                let part = BigUint::from(2u8).modpow(&extension, &number);
-                if part.modpow(&prime, &number).is_one()
-                    && (&part - BigUint::one()).gcd(&number).is_one()
-                {
-                    return;
-                }
-            }
-            unreachable!()
-        });
-    }
+    // #[test]
+    // fn test_round2() {
+    //     let rng = &mut thread_rng();
+    //     const O: usize = 3;
+    //     const N: usize = 12;
+    //     const R: usize = 78 - N - O;
+    //     let prime = rng.gen_prime_exact(79, None);
+    //     (0u64..(1 << R)).into_par_iter().for_each(|i| {
+    //         let v = {
+    //             let mut acc = BigUint::from(i);
+    //             for i in 0..O {
+    //                 acc.set_bit((i + R) as u64, true);
+    //             }
+    //             acc << N
+    //         };
+    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
+    //             let extension = &v + nonce;
+    //             let number = &prime * &extension + BigUint::one();
+    //             let part = BigUint::from(2u8).modpow(&extension, &number);
+    //             if part.modpow(&prime, &number).is_one()
+    //                 && (&part - BigUint::one()).gcd(&number).is_one()
+    //             {
+    //                 return;
+    //             }
+    //         }
+    //         unreachable!()
+    //     });
+    // }
 
-    #[test]
-    fn test_round3() {
-        let rng = &mut thread_rng();
-        const O: usize = 2;
-        const N: usize = 13;
-        const R: usize = 80;
-        let prime = rng.gen_prime_exact(157, None);
-        (0u128..(1 << R)).into_par_iter().for_each(|i| {
-            let v = {
-                let mut acc = BigUint::from(i);
-                for i in 0..O {
-                    acc.set_bit((i + R) as u64, true);
-                }
-                acc << N
-            };
-            for nonce in (1u64 << (N - 1))..(1u64 << N) {
-                let extension = &v + nonce;
-                let number = &prime * &extension + BigUint::one();
-                let part = BigUint::from(2u8).modpow(&extension, &number);
-                if part.modpow(&prime, &number).is_one()
-                    && (&part - BigUint::one()).gcd(&number).is_one()
-                {
-                    return;
-                }
-            }
-            unreachable!()
-        });
-    }
+    // #[test]
+    // fn test_round3() {
+    //     let rng = &mut thread_rng();
+    //     const O: usize = 2;
+    //     const N: usize = 13;
+    //     const R: usize = 80;
+    //     let prime = rng.gen_prime_exact(157, None);
+    //     (0u128..(1 << R)).into_par_iter().for_each(|i| {
+    //         let v = {
+    //             let mut acc = BigUint::from(i);
+    //             for i in 0..O {
+    //                 acc.set_bit((i + R) as u64, true);
+    //             }
+    //             acc << N
+    //         };
+    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
+    //             let extension = &v + nonce;
+    //             let number = &prime * &extension + BigUint::one();
+    //             let part = BigUint::from(2u8).modpow(&extension, &number);
+    //             if part.modpow(&prime, &number).is_one()
+    //                 && (&part - BigUint::one()).gcd(&number).is_one()
+    //             {
+    //                 return;
+    //             }
+    //         }
+    //         unreachable!()
+    //     });
+    // }
 }

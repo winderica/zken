@@ -4,31 +4,30 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-ark-std = { version = "0.4.0-alpha", features = ["parallel"] }
-ark-serialize = { version = "0.4.0-alpha" }
-ark-ff = { version = "0.4.0-alpha", features = ["asm", "parallel"] }
-ark-ec = { version = "0.4.0-alpha", features = ["parallel"] }
-ark-poly = { version = "0.4.0-alpha", features = ["parallel"] }
-ark-r1cs-std = { version = "0.4.0-alpha", features = ["parallel"] }
-ark-bn254 = { version = "0.4.0-alpha" }
-ark-relations = { version = "0.4.0-alpha" }
+ark-std = { version = "0.4.0", features = ["parallel"] }
+ark-serialize = { version = "0.4.0" }
+ark-ff = { version = "0.4.0", features = ["asm", "parallel"] }
+ark-ec = { version = "0.4.0", features = ["parallel"] }
+ark-poly = { version = "0.4.0", features = ["parallel"] }
+ark-r1cs-std = { version = "0.4.0", features = ["parallel"] }
+ark-bn254 = { version = "0.4.0" }
+ark-secp256k1 = "0.4.0"
+ark-relations = { version = "0.4.0" }
 rand = { version = "^0.8.0" }
 num = { version = "^0.4.0", features = ["rand", "serde"] }
 num-prime = "0.4.1"
 num-modular = "0.5.1"
-secp256k1 = { version = "0.24.1", features = ["rand-std", "global-context", "serde"] }
 indoc = "1.0"
 ethers = { version = "1.0", features = ["ethers-solc", "abigen"] }
-tokio = { version = "1.20.1", features = ["full"] }
+tokio = { version = "1.20.1", features = ["macros"] }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.88"
 serde_with = "2.1.0"
-blake2 = { version = "0.9", default-features = false }
 rayon = "*"
-seq-macro = "0.3"
 
 [dev-dependencies]
 ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", features = ["parallel", "print-trace"] }
+seq-macro = "0.3"
 
 [features]
 default = ["parallel"]

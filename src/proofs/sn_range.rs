@@ -79,6 +79,7 @@ mod tests {
             prepare_verifying_key, verify_proof_incl_cp_link,
         },
         protocols::{SNRange, SN},
+        utils::{OnChainVerifiable, ToTransaction},
     };
 
     #[test]
@@ -87,7 +88,7 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let (ask, _) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask = ark_secp256k1::Fr::rand(rng);
 
         let rho_sn = Fr::rand(rng);
 
@@ -122,7 +123,24 @@ mod tests {
         )
         .unwrap();
 
+        println!("{}", proof_link.compressed_size());
+
         assert!(verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &[]).unwrap());
+
+        println!("{}", params_link.vk.to_on_chain_verifier("SNRange"));
+        println!(
+            "{}",
+            vec![
+                proof_link.groth16_proof.a.to_tx(),
+                proof_link.groth16_proof.b.to_tx(),
+                proof_link.groth16_proof.c.to_tx(),
+                vec![proof_link.link_d, vec![proof_link.groth16_proof.d], vec![proof_link.link_pi]]
+                    .concat()
+                    .to_tx(),
+                "[]".to_string()
+            ]
+            .join(",")
+        );
     }
 
     #[bench]
@@ -153,7 +171,7 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let (ask, _) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask = ark_secp256k1::Fr::rand(rng);
 
         let rho_sn = Fr::rand(rng);
 
@@ -195,7 +213,7 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let (ask, _) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask = ark_secp256k1::Fr::rand(rng);
 
         let rho_sn = Fr::rand(rng);
 

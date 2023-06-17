@@ -1,17 +1,11 @@
 use ark_ec::pairing::Pairing;
 use ark_ff::PrimeField;
-use ark_r1cs_std::{alloc::AllocVar, fields::fp::FpVar, prelude::EqGadget, ToBitsGadget};
+use ark_r1cs_std::{alloc::AllocVar, fields::fp::FpVar, prelude::EqGadget};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 
 use crate::{
     constants::W,
-    primitives::{
-        poseidon::HPrime,
-        secp256k1::{
-            constraints::{Secp256k1Gadget, SecretKeyVar},
-            SecretKey, ONE_KEY,
-        },
-    },
+    primitives::poseidon::HPrime,
     protocols::{Params, TokenGadget},
 };
 
@@ -19,8 +13,7 @@ use crate::{
 pub struct Witness<F: PrimeField> {
     pub pt: F,
     pub v: F,
-    pub ask: SecretKey,
-    pub rho_sn: F,
+    pub h_apk: F,
     pub rho_pt: F,
     pub aux_pt: Vec<Vec<bool>>,
 }
@@ -30,8 +23,7 @@ impl<F: PrimeField> Default for Witness<F> {
         Self {
             pt: Default::default(),
             v: Default::default(),
-            ask: ONE_KEY,
-            rho_sn: Default::default(),
+            h_apk: Default::default(),
             rho_pt: Default::default(),
             aux_pt: HPrime::EXTENSIONS.iter().map(|(n, _, _)| vec![false; *n]).collect(),
         }
@@ -49,26 +41,18 @@ impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for Circuit<'a, E> {
         cs: ConstraintSystemRef<E::ScalarField>,
     ) -> ark_relations::r1cs::Result<()> {
         let Self { pp, w } = self;
-        let Witness { pt, v, ask, rho_sn, rho_pt, aux_pt } = w;
+        let Witness { pt, v, h_apk, rho_pt, aux_pt } = w;
 
         let v = FpVar::new_witness(cs.clone(), || Ok(v))?;
         let pt = FpVar::new_witness(cs.clone(), || Ok(pt))?;
-        let ask = ask.secret_bytes().to_vec();
-        let sk0 =
-            FpVar::new_witness(cs.clone(), || Ok(E::ScalarField::from_be_bytes_mod_order(&ask[16..])))?;
-        let sk1 =
-            FpVar::new_witness(cs.clone(), || Ok(E::ScalarField::from_be_bytes_mod_order(&ask[..16])))?;
-        let rho_sn = FpVar::new_witness(cs.clone(), || Ok(rho_sn))?;
-        let ask = SecretKeyVar([&sk0.to_bits_le()?[..128], &sk1.to_bits_le()?[..128]].concat());
+        let h_apk = FpVar::new_witness(cs.clone(), || Ok(h_apk))?;
         let rho_pt = FpVar::new_witness(cs.clone(), || Ok(rho_pt))?;
         let aux_pt = aux_pt
             .iter()
             .map(|x| Vec::new_witness(cs.clone(), || Ok(x.clone())))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let apk = Secp256k1Gadget::pk_gen::<_, W>(&ask)?;
-
-        pt.enforce_equal(&TokenGadget::pt_gen(pp, &apk, v, rho_sn, rho_pt, &aux_pt)?)?;
+        pt.enforce_equal(&TokenGadget::pt_gen::<_, W>(pp, h_apk, v, rho_pt, &aux_pt)?)?;
 
         println!("{}", cs.num_constraints());
 
@@ -79,6 +63,7 @@ impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for Circuit<'a, E> {
 #[cfg(test)]
 mod tests {
     use ark_bn254::{Bn254, Fr};
+    use ark_ec::AffineRepr;
     use ark_ff::UniformRand;
     use ark_serialize::CanonicalSerialize;
     use rand::thread_rng;
@@ -89,7 +74,9 @@ mod tests {
             create_random_proof_incl_cp_link, generate_random_parameters_incl_cp_link,
             prepare_verifying_key, verify_proof_incl_cp_link,
         },
+        primitives::poseidon::HField,
         protocols::TK,
+        utils::{OnChainVerifiable, ToTransaction},
     };
 
     #[test]
@@ -98,22 +85,20 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let (ask, apk) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask = ark_secp256k1::Fr::rand(rng);
+        let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
 
         let v = Fr::rand(rng);
-        let rho_sn = Fr::rand(rng);
         let rho_pt = Fr::rand(rng);
 
-        let (pt, aux_pt) = TK::pt_gen(pp, &apk, v, rho_sn, rho_pt);
+        let (pt, aux_pt) = TK::pt_gen(pp, h_apk, v, rho_pt);
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
-        let r_sk0 = Fr::rand(rng);
-        let r_sk1 = Fr::rand(rng);
-        let r_rho_sn = Fr::rand(rng);
+        let r_h_apk = Fr::rand(rng);
 
-        let w = Witness { pt, v, ask, rho_sn, rho_pt, aux_pt };
-        let link_v = vec![r_v, r_pt, r_sk0, r_sk1, r_rho_sn];
+        let w = Witness { pt, v, h_apk, rho_pt, aux_pt };
+        let link_v = vec![r_v, r_pt, r_h_apk];
 
         let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
             Circuit { pp, w: Default::default() },
@@ -135,7 +120,24 @@ mod tests {
         )
         .unwrap();
 
+        println!("{}", proof_link.compressed_size());
+
         assert!(verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &[]).unwrap());
+
+        println!("{}", params_link.vk.to_on_chain_verifier("PTForm"));
+        println!(
+            "{}",
+            vec![
+                proof_link.groth16_proof.a.to_tx(),
+                proof_link.groth16_proof.b.to_tx(),
+                proof_link.groth16_proof.c.to_tx(),
+                vec![proof_link.link_d, vec![proof_link.groth16_proof.d], vec![proof_link.link_pi]]
+                    .concat()
+                    .to_tx(),
+                "[]".to_string()
+            ]
+            .join(",")
+        );
     }
 
     #[bench]
@@ -146,11 +148,9 @@ mod tests {
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
-        let r_sk0 = Fr::rand(rng);
-        let r_sk1 = Fr::rand(rng);
-        let r_rho_sn = Fr::rand(rng);
+        let r_h_apk = Fr::rand(rng);
 
-        let link_v = vec![r_v, r_pt, r_sk0, r_sk1, r_rho_sn];
+        let link_v = vec![r_v, r_pt, r_h_apk];
 
         b.iter(|| {
             generate_random_parameters_incl_cp_link::<Bn254, _, _>(
@@ -169,22 +169,20 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let (ask, apk) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask = ark_secp256k1::Fr::rand(rng);
+        let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
 
         let v = Fr::rand(rng);
-        let rho_sn = Fr::rand(rng);
         let rho_pt = Fr::rand(rng);
 
-        let (pt, aux_pt) = TK::pt_gen(pp, &apk, v, rho_sn, rho_pt);
+        let (pt, aux_pt) = TK::pt_gen(pp, h_apk, v, rho_pt);
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
-        let r_sk0 = Fr::rand(rng);
-        let r_sk1 = Fr::rand(rng);
-        let r_rho_sn = Fr::rand(rng);
+        let r_h_apk = Fr::rand(rng);
 
-        let w = Witness { pt, v, ask, rho_sn, rho_pt, aux_pt };
-        let link_v = vec![r_v, r_pt, r_sk0, r_sk1, r_rho_sn];
+        let w = Witness { pt, v, h_apk, rho_pt, aux_pt };
+        let link_v = vec![r_v, r_pt, r_h_apk];
 
         let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
             Circuit { pp, w: Default::default() },
@@ -212,22 +210,20 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let (ask, apk) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let ask = ark_secp256k1::Fr::rand(rng);
+        let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
 
         let v = Fr::rand(rng);
-        let rho_sn = Fr::rand(rng);
         let rho_pt = Fr::rand(rng);
 
-        let (pt, aux_pt) = TK::pt_gen(pp, &apk, v, rho_sn, rho_pt);
+        let (pt, aux_pt) = TK::pt_gen(pp, h_apk, v, rho_pt);
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
-        let r_sk0 = Fr::rand(rng);
-        let r_sk1 = Fr::rand(rng);
-        let r_rho_sn = Fr::rand(rng);
+        let r_h_apk = Fr::rand(rng);
 
-        let w = Witness { pt, v, ask, rho_sn, rho_pt, aux_pt };
-        let link_v = vec![r_v, r_pt, r_sk0, r_sk1, r_rho_sn];
+        let w = Witness { pt, v, h_apk, rho_pt, aux_pt };
+        let link_v = vec![r_v, r_pt, r_h_apk];
 
         let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
             Circuit { pp, w: Default::default() },
@@ -247,8 +243,6 @@ mod tests {
         )
         .unwrap();
 
-        b.iter(|| {
-            verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &[]).unwrap()
-        })
+        b.iter(|| verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &[]).unwrap())
     }
 }

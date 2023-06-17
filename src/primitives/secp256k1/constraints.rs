@@ -1,43 +1,20 @@
 use std::borrow::Borrow;
 
-use ark_ff::{PrimeField, BigInteger};
+use ark_ec::AffineRepr;
+use ark_ff::{BigInteger, PrimeField};
 use ark_r1cs_std::{
+    fields::fp::FpVar,
     prelude::{AllocVar, AllocationMode, Boolean, EqGadget},
     select::CondSelectGadget,
-    R1CSVar, fields::fp::FpVar, ToBitsGadget,
+    R1CSVar, ToBitsGadget,
 };
 use ark_relations::r1cs::{ConstraintSystemRef, Namespace, SynthesisError};
-use num::{BigUint, One, Zero, Integer};
-use num_modular::{ModularCoreOps, ModularUnaryOps};
-use secp256k1::SecretKey;
+use num::{BigUint, Zero};
 
-use crate::primitives::{bn::BigUintVar, poseidon::{PoseidonParameters, constraints::CRHGadget}};
-
-pub fn parse_pk(pk: &[u8]) -> (BigUint, BigUint) {
-    match pk.len() {
-        33 => {
-            let x = BigUint::from_bytes_be(&pk[1..33]);
-
-            let m = (BigUint::one() << 256u32) - BigUint::from(4294968273u128);
-            let y = {
-                let yy = (&x * &x * &x + BigUint::from(7u8)) % &m;
-                let y = yy.modpow(&((&m + BigUint::one()) >> 2u8), &m);
-                if y.is_even() != pk[0].is_even() {
-                    m - y
-                } else {
-                    y
-                }
-            };
-            (x, y)
-        }
-        65 => {
-            let x = BigUint::from_bytes_be(&pk[1..33]);
-            let y = BigUint::from_bytes_be(&pk[33..]);
-            (x, y)
-        }
-        _ => panic!("invalid public key length"),
-    }
-}
+use crate::primitives::{
+    bn::BigUintVar,
+    poseidon::{constraints::CRHGadget, HFieldGadget, PoseidonParameters},
+};
 
 #[derive(Clone)]
 pub struct PointVar<C: PrimeField, const W: usize>(
@@ -78,8 +55,10 @@ impl<F: PrimeField, const W: usize> CondSelectGadget<F> for PointVar<F, W> {
     }
 }
 
-impl<F: PrimeField, const W: usize> AllocVar<Vec<u8>, F> for PointVar<F, W> {
-    fn new_variable<T: Borrow<Vec<u8>>>(
+impl<B: PrimeField, P: AffineRepr<BaseField = B>, F: PrimeField, const W: usize> AllocVar<P, F>
+    for PointVar<F, W>
+{
+    fn new_variable<T: Borrow<P>>(
         cs: impl Into<Namespace<F>>,
         f: impl FnOnce() -> Result<T, SynthesisError>,
         mode: AllocationMode,
@@ -88,20 +67,20 @@ impl<F: PrimeField, const W: usize> AllocVar<Vec<u8>, F> for PointVar<F, W> {
         let cs = ns.cs();
         let r = f().map(|g| g.borrow().clone())?;
 
-        let (x, y) = parse_pk(&r);
+        let (&x, &y) = r.xy().unwrap_or((&B::zero(), &B::zero()));
 
-        let x = BigUintVar::new_variable(cs.clone(), || Ok((x, 256)), mode)?;
-        let y = BigUintVar::new_variable(cs, || Ok((y, 256)), mode)?;
+        let x = BigUintVar::new_variable(cs.clone(), || Ok((x.into(), 256)), mode)?;
+        let y = BigUintVar::new_variable(cs, || Ok((y.into(), 256)), mode)?;
 
         Ok(Self(x, y, Boolean::FALSE))
     }
 }
 
 impl<F: PrimeField, const W: usize> PointVar<F, W> {
-    pub fn inputize(pk: &[u8]) -> Vec<F> {
-        let (x, y) = parse_pk(pk);
-        let x = BigUintVar::<F, W>::inputize(&x, 256);
-        let y = BigUintVar::<F, W>::inputize(&y, 256);
+    pub fn inputize<B: PrimeField, P: AffineRepr<BaseField = B>>(pk: &P) -> Vec<F> {
+        let (&x, &y) = pk.xy().unwrap_or((&B::zero(), &B::zero()));
+        let x = BigUintVar::<F, W>::inputize(&x.into(), 256);
+        let y = BigUintVar::<F, W>::inputize(&y.into(), 256);
         [x, y].concat()
     }
 
@@ -118,24 +97,22 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
         let PointVar(x1, y1, i1) = self;
         let PointVar(x2, y2, i2) = other;
 
-        let m =
-            BigUintVar::constant((BigUint::one() << 256u32) - BigUint::from(4294968273u128), 256)?;
+        let m = BigUintVar::constant(ark_secp256k1::Fq::MODULUS.into(), 256)?;
 
         let (s, x, y) = {
             let bound = m.ubound().bits() as usize;
             let (s, x, y) = if cs.is_in_setup_mode() {
                 (BigUint::zero(), BigUint::zero(), BigUint::zero())
             } else {
-                let m = m.value().unwrap_or_default();
-                let x1 = x1.value().unwrap_or_default();
-                let x2 = x2.value().unwrap_or_default();
-                let y1 = y1.value().unwrap_or_default();
-                let y2 = y2.value().unwrap_or_default();
-                let s = (&m + &y1 - &y2).mulm(&(&m + &x1 - &x2).invm(&m).unwrap_or_default(), &m);
-                let x = (&s * &s + &m + &m - &x1 - &x2) % &m;
-                let y = (&m - &y1 + &s * (&m + &x1 - &x)) % &m;
+                let x1 = ark_secp256k1::Fq::from(x1.value().unwrap_or_default());
+                let x2 = ark_secp256k1::Fq::from(x2.value().unwrap_or_default());
+                let y1 = ark_secp256k1::Fq::from(y1.value().unwrap_or_default());
+                let y2 = ark_secp256k1::Fq::from(y2.value().unwrap_or_default());
+                let s = (y1 - y2) / (x1 - x2);
+                let x = s * s - x1 - x2;
+                let y = s * (x1 - x) - y1;
 
-                (s, x, y)
+                (s.into(), x.into(), y.into())
             };
             if cs.is_none() {
                 (
@@ -152,8 +129,7 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
             }
         };
         let sx1 = x1.mul_no_carry(&s)?;
-        sx1.add_no_carry(y2)
-            .enforce_congruent_const(&x2.mul_no_carry(&s)?.add_no_carry(y1), &m)?;
+        sx1.add_no_carry(y2).enforce_congruent_const(&x2.mul_no_carry(&s)?.add_no_carry(y1), &m)?;
         s.mul_no_carry(&s)?.enforce_congruent_const(&x.add_no_carry(x1).add_no_carry(x2), &m)?;
         s.mul_no_carry(&x)?.add_no_carry(y1).add_no_carry(&y).enforce_congruent_const(&sx1, &m)?;
 
@@ -163,8 +139,7 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
     pub fn double(&self) -> Result<Self, SynthesisError> {
         let PointVar(x, y, i) = self;
 
-        let m =
-            BigUintVar::constant((BigUint::one() << 256u32) - BigUint::from(4294968273u128), 256)?;
+        let m = BigUintVar::constant(ark_secp256k1::Fq::MODULUS.into(), 256)?;
         let three = BigUintVar::constant(BigUint::from(3u8), 2)?;
 
         let (s, xx, yy) = {
@@ -173,15 +148,13 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
             let (s, xx, yy) = if cs.is_in_setup_mode() {
                 (BigUint::zero(), BigUint::zero(), BigUint::zero())
             } else {
-                let m = m.value().unwrap_or_default();
-                let x = x.value().unwrap_or_default();
-                let y = y.value().unwrap_or_default();
-                let s = (&x * &x * BigUint::from(3u8))
-                    .mulm(&(&y + &y).invm(&m).unwrap_or_default(), &m);
-                let xx = (&s * &s + &m + &m - &x - &x) % &m;
-                let yy = (&m - &y + &s * (&m + &x - &xx)) % &m;
+                let x = ark_secp256k1::Fq::from(x.value().unwrap_or_default());
+                let y = ark_secp256k1::Fq::from(y.value().unwrap_or_default());
+                let s = (x * x * ark_secp256k1::Fq::from(3u8)) / (y + y);
+                let xx = s * s - x - x;
+                let yy = s * (x - xx) - y;
 
-                (s, xx, yy)
+                (s.into(), xx.into(), yy.into())
             };
             if cs.is_none() {
                 (
@@ -210,8 +183,7 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
     }
 
     fn scalar_mul(&self, s: &[Boolean<F>]) -> Result<Self, SynthesisError> {
-        let m =
-            BigUintVar::constant((BigUint::one() << 256u32) - BigUint::from(4294968273u128), 256)?;
+        let m = BigUintVar::constant(ark_secp256k1::Fq::MODULUS.into(), 256)?;
         let k = 4;
         let mut base_powers = vec![Self::inf(), self.clone(), self.double()?];
         for _ in 3..(1 << k) {
@@ -246,17 +218,21 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
         r.1.enforce_lt(&m)?;
         Ok(r)
     }
+}
 
-    pub fn hash(&self, pp: &PoseidonParameters<F>) -> Result<FpVar<F>, SynthesisError> {
+impl<F: PrimeField, const W: usize> HFieldGadget<F> for PointVar<F, W> {
+    fn hash_to_field_var(&self, pp: &PoseidonParameters<F>) -> Result<FpVar<F>, SynthesisError> {
         let x_bits = self.0.to_bits_le()?;
         let y_bits = self.1.to_bits_le()?;
-        let x_chunks = x_bits.split_at(128);
-        let x0 = Boolean::le_bits_to_fp_var(x_chunks.0)?;
-        let x1 = Boolean::le_bits_to_fp_var(x_chunks.1)?;
-        let y_chunks = y_bits.split_at(128);
-        let y0 = Boolean::le_bits_to_fp_var(y_chunks.0)?;
-        let y1 = Boolean::le_bits_to_fp_var(y_chunks.1)?;
-        CRHGadget::hash(pp, x0, x1, y0, y1)
+        let (x0, x1) = x_bits.split_at(128);
+        let (y0, y1) = y_bits.split_at(128);
+        CRHGadget::hash(
+            pp,
+            Boolean::le_bits_to_fp_var(x0)?,
+            Boolean::le_bits_to_fp_var(x1)?,
+            Boolean::le_bits_to_fp_var(y0)?,
+            Boolean::le_bits_to_fp_var(y1)?,
+        )
     }
 }
 
@@ -264,19 +240,19 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
 pub struct SecretKeyVar<F: PrimeField>(pub Vec<Boolean<F>>);
 
 impl<F: PrimeField> R1CSVar<F> for SecretKeyVar<F> {
-    type Value = SecretKey;
+    type Value = ark_secp256k1::Fr;
 
     fn cs(&self) -> ConstraintSystemRef<F> {
         self.0.cs()
     }
 
     fn value(&self) -> Result<Self::Value, SynthesisError> {
-        Ok(SecretKey::from_slice(&F::BigInt::from_bits_le(&self.0.value()?).to_bytes_be()).unwrap())
+        Ok(<Self::Value as PrimeField>::BigInt::from_bits_le(&self.0.value()?).into())
     }
 }
 
-impl<F: PrimeField> AllocVar<Vec<u8>, F> for SecretKeyVar<F> {
-    fn new_variable<T: Borrow<Vec<u8>>>(
+impl<S: PrimeField, F: PrimeField> AllocVar<S, F> for SecretKeyVar<F> {
+    fn new_variable<T: Borrow<S>>(
         cs: impl Into<Namespace<F>>,
         f: impl FnOnce() -> Result<T, SynthesisError>,
         mode: AllocationMode,
@@ -286,14 +262,13 @@ impl<F: PrimeField> AllocVar<Vec<u8>, F> for SecretKeyVar<F> {
         let b = f()?;
         let b = b.borrow();
 
-        Ok(Self(match F::BigInt::try_from(BigUint::from_bytes_be(b)) {
-            Ok(v) => v
+        Ok(Self(
+            b.into_bigint()
                 .to_bits_le()
                 .into_iter()
                 .map(|i| Boolean::new_variable(cs.clone(), || Ok(i), mode).unwrap())
                 .collect(),
-            Err(_) => panic!(),
-        }))
+        ))
     }
 }
 
@@ -321,8 +296,7 @@ impl Secp256k1Gadget {
                 r
             })
             .collect::<Vec<_>>();
-        let m =
-            BigUintVar::constant((BigUint::one() << 256u32) - BigUint::from(4294968273u128), 256)?;
+        let m = BigUintVar::constant(ark_secp256k1::Fq::MODULUS.into(), 256)?;
         let mut pk = PointVar::inf();
 
         for (i, s) in sk.0.chunks(L).enumerate() {
@@ -354,13 +328,14 @@ mod tests {
     use std::{error::Error, time::Instant};
 
     use ark_bn254::{Bn254, Fr};
+    use ark_ec::{AffineRepr, CurveGroup};
+    use ark_ff::UniformRand;
     use ark_groth16::{
         create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
     };
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
     use num::Num;
     use rand::{thread_rng, RngCore};
-    use secp256k1::{PublicKey, SECP256K1};
 
     use super::*;
 
@@ -369,14 +344,16 @@ mod tests {
     #[test]
     fn correctness() -> Result<(), Box<dyn Error>> {
         let cs = ConstraintSystem::<Fr>::new_ref();
-        let (sk, pk) = secp256k1::Secp256k1::new().generate_keypair(&mut thread_rng());
-        let pk = parse_pk(&pk.serialize_uncompressed());
+        let rng = &mut thread_rng();
+        let sk = ark_secp256k1::Fr::rand(rng);
+        let pk = (ark_secp256k1::Affine::generator() * sk).into_affine();
+        let (&x, &y) = pk.xy().unwrap();
 
-        let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(sk.secret_bytes().to_vec()))?;
+        let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(sk))?;
         let pk_var = Secp256k1Gadget::pk_gen::<Fr, W>(&sk_var)?;
 
-        assert_eq!(pk_var.0.value()?, pk.0);
-        assert_eq!(pk_var.1.value()?, pk.1);
+        assert_eq!(pk_var.0.value()?, x.into());
+        assert_eq!(pk_var.1.value()?, y.into());
         assert!(cs.is_satisfied()?);
         println!("{}", cs.num_constraints());
         Ok(())
@@ -391,10 +368,10 @@ mod tests {
     //             let cs = ConstraintSystem::<Fr>::new_ref();
     //             let (sk, pk) = secp256k1::Secp256k1::new().generate_keypair(rng);
     //             let pk = parse_pk(&pk.serialize_uncompressed());
-        
+
     //             let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(sk.secret_bytes().to_vec()))?;
     //             let pk_var = Secp256k1Gadget::pk_gen::<Fr, W>(&sk_var)?;
-        
+
     //             assert!(cs.is_satisfied()?);
     //             println!("{}: {}", W, cs.num_constraints());
     //         }
@@ -406,13 +383,12 @@ mod tests {
     #[test]
     fn correctness2() -> Result<(), Box<dyn Error>> {
         let cs = ConstraintSystem::<Fr>::new_ref();
-        let mut sk_buf = vec![0u8; 32];
-        thread_rng().fill_bytes(&mut sk_buf);
-        let sk = SecretKey::from_slice(&sk_buf)?;
-        let pk = sk.public_key(SECP256K1);
-        let pk = parse_pk(&pk.serialize_uncompressed());
+        let rng = &mut thread_rng();
+        let sk = ark_secp256k1::Fr::rand(rng);
+        let pk = (ark_secp256k1::Affine::generator() * sk).into_affine();
+        let (&x, &y) = pk.xy().unwrap();
 
-        let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(sk_buf))?;
+        let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(sk))?;
         let pk_var = PointVar::<Fr, W>(
             BigUintVar::new_witness(cs.clone(), || {
                 Ok((
@@ -440,8 +416,8 @@ mod tests {
         )
         .scalar_mul(&sk_var.0)?;
 
-        assert_eq!(pk_var.0.value()?, pk.0);
-        assert_eq!(pk_var.1.value()?, pk.1);
+        assert_eq!(pk_var.0.value()?, x.into());
+        assert_eq!(pk_var.1.value()?, y.into());
         assert!(cs.is_satisfied()?);
         println!("{}", cs.num_constraints());
         Ok(())
@@ -459,7 +435,7 @@ mod tests {
     //             let sk = SecretKey::from_slice(&sk_buf)?;
     //             let pk = sk.public_key(SECP256K1);
     //             let pk = parse_pk(&pk.serialize_uncompressed());
-        
+
     //             let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(sk_buf))?;
     //             let pk_var = PointVar::<Fr, W>(
     //                 BigUintVar::new_witness(cs.clone(), || {
@@ -487,7 +463,7 @@ mod tests {
     //                 Boolean::FALSE,
     //             )
     //             .scalar_mul(&sk_var.0)?;
-        
+
     //             assert!(cs.is_satisfied()?);
     //             println!("{}: {}", W, cs.num_constraints());
     //         }
@@ -497,8 +473,8 @@ mod tests {
     // }
 
     struct TestCircuit {
-        sk: SecretKey,
-        pk: PublicKey,
+        sk: ark_secp256k1::Fr,
+        pk: ark_secp256k1::Affine,
     }
 
     impl ConstraintSynthesizer<Fr> for TestCircuit {
@@ -506,10 +482,8 @@ mod tests {
             self,
             cs: ConstraintSystemRef<Fr>,
         ) -> ark_relations::r1cs::Result<()> {
-            let sk_var =
-                SecretKeyVar::new_witness(cs.clone(), || Ok(self.sk.secret_bytes().to_vec()))?;
-            let pk_var =
-                PointVar::<Fr, W>::new_input(cs, || Ok(self.pk.serialize().to_vec()))?;
+            let sk_var = SecretKeyVar::new_witness(cs.clone(), || Ok(self.sk))?;
+            let pk_var = PointVar::<Fr, W>::new_input(cs, || Ok(self.pk))?;
             Secp256k1Gadget::pk_gen(&sk_var)?.enforce_equal(&pk_var)?;
             Ok(())
         }
@@ -518,13 +492,13 @@ mod tests {
     #[test]
     fn test() -> Result<(), Box<dyn Error>> {
         let rng = &mut thread_rng();
-        let (sk, pk) = secp256k1::Secp256k1::new().generate_keypair(rng);
+        let mut sk_buf = vec![0u8; 32];
+        thread_rng().fill_bytes(&mut sk_buf);
+        let sk = ark_secp256k1::Fr::from_be_bytes_mod_order(&sk_buf);
+        let pk = (ark_secp256k1::Affine::generator() * sk).into_affine();
 
         let params = generate_random_parameters::<Bn254, _, _>(
-            TestCircuit {
-                sk: SecretKey::new(rng),
-                pk: secp256k1::Secp256k1::new().generate_keypair(rng).1,
-            },
+            TestCircuit { sk: ark_secp256k1::Fr::rand(rng), pk: ark_secp256k1::Affine::rand(rng) },
             rng,
         )
         .unwrap();
@@ -534,7 +508,7 @@ mod tests {
         let proof = create_random_proof(TestCircuit { sk, pk }, &params, rng).unwrap();
         println!("proof time: {:?}", now.elapsed());
 
-        assert!(verify_proof(&pvk, &proof, &PointVar::<Fr, W>::inputize(&pk.serialize())).unwrap());
+        assert!(verify_proof(&pvk, &proof, &PointVar::<Fr, W>::inputize(&pk)).unwrap());
         Ok(())
     }
 }

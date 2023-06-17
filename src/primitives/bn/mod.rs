@@ -242,7 +242,7 @@ impl<F: PrimeField, const W: usize> BigUintVar<F, W> {
         let cs = self.cs().or(other.cs());
         let len = min(self.0.len(), other.0.len());
 
-        let (steps, xxs, yys) = {
+        let (steps, xxs, yys, rest) = {
             let mut steps = vec![];
             let mut x_grouped = vec![];
             let mut y_grouped = vec![];
@@ -272,8 +272,7 @@ impl<F: PrimeField, const W: usize> BigUintVar<F, W> {
             for v in &(if i < self.0.len() { self } else { other }).0[i..] {
                 vv = vv.add(v).unwrap();
             }
-            vv.0.enforce_equal(&FpVar::zero())?;
-            (steps, x_grouped, y_grouped)
+            (steps, x_grouped, y_grouped, vv.0)
         };
         let n = steps.len();
         let mut acc = BigUint::zero();
@@ -296,7 +295,7 @@ impl<F: PrimeField, const W: usize> BigUintVar<F, W> {
             };
             let (q, r) = acc.div_rem(&(BigUint::one() << step));
             if i == n - 1 {
-                c.enforce_equal(&FpVar::constant(F::from(q.clone())))?;
+                (&c - &rest).enforce_equal(&FpVar::constant(F::from(q.clone())))?;
             } else {
                 Self::to_bit_array(&c, carry_width)?;
             }
