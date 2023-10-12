@@ -5,15 +5,10 @@
 
 use std::ops::Mul;
 
-use ark_ec::{pairing::Pairing, CurveGroup, AffineRepr};
+use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ff::{One, UniformRand};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{
-    marker::PhantomData,
-    ops::Neg,
-    rand::Rng,
-    vec::Vec,
-};
+use ark_std::{marker::PhantomData, ops::Neg, rand::Rng, vec::Vec};
 
 use super::utils::*;
 

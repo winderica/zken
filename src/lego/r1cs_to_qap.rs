@@ -1,12 +1,11 @@
+use core::ops::{AddAssign, Deref};
+
 use ark_ff::{One, PrimeField, Zero};
 use ark_poly::EvaluationDomain;
-use ark_std::{cfg_into_iter, cfg_iter, cfg_iter_mut, end_timer, start_timer, vec};
-
 use ark_relations::r1cs::{
     ConstraintMatrices, ConstraintSystemRef, Result as R1CSResult, SynthesisError,
 };
-use core::ops::{AddAssign, Deref};
-
+use ark_std::{cfg_into_iter, cfg_iter, cfg_iter_mut, end_timer, start_timer, vec};
 use rayon::prelude::*;
 
 #[inline]
@@ -18,17 +17,22 @@ where
 {
     // Need to wrap in a closure when using Rayon
 
-    let res = cfg_iter!(terms).fold(|| R::zero(), |mut sum, (coeff, index)| {
-        let val = &assignment[*index];
+    let res = cfg_iter!(terms)
+        .fold(
+            || R::zero(),
+            |mut sum, (coeff, index)| {
+                let val = &assignment[*index];
 
-        if coeff.is_one() {
-            sum += *val;
-        } else {
-            sum += val.mul(coeff);
-        }
+                if coeff.is_one() {
+                    sum += *val;
+                } else {
+                    sum += val.mul(coeff);
+                }
 
-        sum
-    }).sum();
+                sum
+            },
+        )
+        .sum();
 
     // Need to explicitly call `.sum()` when using Rayon
     return res;
@@ -55,11 +59,8 @@ pub trait R1CStoQAP {
         let cs = prover.borrow().unwrap();
         let prover = cs.deref();
 
-        let full_assignment = [
-            prover.instance_assignment.as_slice(),
-            prover.witness_assignment.as_slice(),
-        ]
-        .concat();
+        let full_assignment =
+            [prover.instance_assignment.as_slice(), prover.witness_assignment.as_slice()].concat();
 
         Self::witness_map_from_matrices::<F, D>(
             &matrices,
@@ -180,19 +181,15 @@ impl R1CStoQAP for LibsnarkReduction {
         drop(b);
 
         let mut c = vec![zero; domain_size];
-        cfg_iter_mut!(c[..num_constraints])
-            .enumerate()
-            .for_each(|(i, c)| {
-                *c = evaluate_constraint(&matrices.c[i], &full_assignment);
-            });
+        cfg_iter_mut!(c[..num_constraints]).enumerate().for_each(|(i, c)| {
+            *c = evaluate_constraint(&matrices.c[i], &full_assignment);
+        });
 
         domain.ifft_in_place(&mut c);
         coset_domain.fft_in_place(&mut c);
 
-        let vanishing_polynomial_over_coset = domain
-            .evaluate_vanishing_polynomial(F::GENERATOR)
-            .inverse()
-            .unwrap();
+        let vanishing_polynomial_over_coset =
+            domain.evaluate_vanishing_polynomial(F::GENERATOR).inverse().unwrap();
         cfg_iter_mut!(ab).zip(c).for_each(|(ab_i, c_i)| {
             *ab_i -= &c_i;
             *ab_i *= &vanishing_polynomial_over_coset;

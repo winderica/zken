@@ -1,5 +1,5 @@
-use ark_ec::{pairing::Pairing, scalar_mul::fixed_base::FixedBase, Group, CurveGroup};
-use ark_ff::{Field, UniformRand, Zero, PrimeField};
+use ark_ec::{pairing::Pairing, scalar_mul::fixed_base::FixedBase, CurveGroup, Group};
+use ark_ff::{Field, PrimeField, UniformRand, Zero};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use ark_relations::r1cs::{
     ConstraintSynthesizer, ConstraintSystem, OptimizationGoal, SynthesisError, SynthesisMode,
@@ -111,12 +111,7 @@ where
     // Setup public params for the Subspace Snark
     let link_rows = commit_witness_count + 1; // we're comparing two commitments, proof.d and proof.link_d
     let link_cols = commit_witness_count * 2 + 1; // we have `commit_witness_count` witnesses and 1 hiding factor per row
-    let link_pp = PP::<E> {
-        l: link_rows,
-        t: link_cols,
-        g1: link_gens.g1,
-        g2: link_gens.g2,
-    };
+    let link_pp = PP::<E> { l: link_rows, t: link_cols, g1: link_gens.g1, g2: link_gens.g2 };
 
     let mut link_m = SparseMatrix::<E::G1Affine>::new(link_rows, link_cols);
     for i in 0..commit_witness_count {
@@ -200,8 +195,10 @@ where
     let n = num_instance_variables + commit_witness_count;
 
     let reduction_time = start_timer!(|| "R1CS to QAP Instance Map with Evaluation");
-    let (a, b, c, zt, qap_num_variables, m_raw) =
-        LibsnarkReduction::instance_map_with_evaluation::<E::ScalarField, D<E::ScalarField>>(cs, &t)?;
+    let (a, b, c, zt, qap_num_variables, m_raw) = LibsnarkReduction::instance_map_with_evaluation::<
+        E::ScalarField,
+        D<E::ScalarField>,
+    >(cs, &t)?;
     end_timer!(reduction_time);
 
     // Compute query densities
@@ -233,14 +230,12 @@ where
     // Compute B window table
     let g2_time = start_timer!(|| "Compute G2 table");
     let g2_window = FixedBase::get_mul_window_size(non_zero_b);
-    let g2_table =
-        FixedBase::get_window_table::<E::G2>(scalar_bits, g2_window, g2_generator);
+    let g2_table = FixedBase::get_window_table::<E::G2>(scalar_bits, g2_window, g2_generator);
     end_timer!(g2_time);
 
     // Compute the B-query in G2
     let b_g2_time = start_timer!(|| "Calculate B G2");
-    let b_g2_query =
-        FixedBase::msm::<E::G2>(scalar_bits, g2_window, &g2_table, &b);
+    let b_g2_query = FixedBase::msm::<E::G2>(scalar_bits, g2_window, &g2_table, &b);
     drop(g2_table);
     end_timer!(b_g2_time);
 
@@ -248,8 +243,7 @@ where
     let g1_window_time = start_timer!(|| "Compute G1 window table");
     let g1_window =
         FixedBase::get_mul_window_size(non_zero_a + non_zero_b + qap_num_variables + m_raw + 1);
-    let g1_table =
-        FixedBase::get_window_table::<E::G1>(scalar_bits, g1_window, g1_generator);
+    let g1_table = FixedBase::get_window_table::<E::G1>(scalar_bits, g1_window, g1_generator);
     end_timer!(g1_window_time);
 
     // Generate the R1CS proving key
@@ -266,15 +260,13 @@ where
 
     // Compute the A-query
     let a_time = start_timer!(|| "Calculate A");
-    let a_query =
-        FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &a);
+    let a_query = FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &a);
     drop(a);
     end_timer!(a_time);
 
     // Compute the B-query in G1
     let b_g1_time = start_timer!(|| "Calculate B G1");
-    let b_g1_query =
-        FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &b);
+    let b_g1_query = FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &b);
     drop(b);
     end_timer!(b_g1_time);
 
@@ -293,8 +285,7 @@ where
 
     // Compute the L-query
     let l_time = start_timer!(|| "Calculate L");
-    let l_query =
-        FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &l[n..]);
+    let l_query = FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &l[n..]);
     drop(l);
     end_timer!(l_time);
 
@@ -303,12 +294,7 @@ where
     // Generate R1CS verification key
     let verifying_key_time = start_timer!(|| "Generate the R1CS verification key");
     let gamma_g2 = g2_generator.mul_bigint(gamma.into_bigint());
-    let gamma_abc_g1 = FixedBase::msm::<E::G1>(
-        scalar_bits,
-        g1_window,
-        &g1_table,
-        &gamma_abc,
-    );
+    let gamma_abc_g1 = FixedBase::msm::<E::G1>(scalar_bits, g1_window, &g1_table, &gamma_abc);
 
     drop(g1_table);
 

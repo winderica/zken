@@ -1,13 +1,12 @@
-use super::link::{EK, PP, VK};
 use ark_ec::{pairing::Pairing, CurveGroup};
-use ark_ff::{UniformRand};
+use ark_ff::UniformRand;
 use ark_serialize::*;
-use ark_std::{
-    vec::Vec,
-};
+use ark_std::vec::Vec;
 use rand::Rng;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+
+use super::link::{EK, PP, VK};
 
 /// A proof in the Groth16 SNARK
 #[derive(Clone, Debug, PartialEq, CanonicalSerialize, CanonicalDeserialize)]
@@ -172,7 +171,9 @@ pub struct ProvingKeyWithLink<E: Pairing> {
 
 /// Public parameters for CP link
 #[serde_as]
-#[derive(Clone, Debug, PartialEq, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, CanonicalSerialize, CanonicalDeserialize, Serialize, Deserialize,
+)]
 pub struct LinkPublicGenerators<E: Pairing> {
     #[serde_as(as = "crate::utils::SerdeAs")]
     pub g: E::G1Affine,
@@ -194,7 +195,6 @@ impl<E: Pairing> LinkPublicGenerators<E> {
         }
     }
 }
-
 
 impl<E: Pairing> VerifyingKey<E> {
     pub fn num_public_inputs(&self) -> usize {

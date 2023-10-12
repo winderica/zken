@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 
 use ark_ec::AffineRepr;
-use ark_ff::{BigInteger, PrimeField};
+use ark_ff::{BigInteger, PrimeField, Field};
 use ark_r1cs_std::{
     fields::fp::FpVar,
     prelude::{AllocVar, AllocationMode, Boolean, EqGadget},
@@ -150,7 +150,8 @@ impl<F: PrimeField, const W: usize> PointVar<F, W> {
             } else {
                 let x = ark_secp256k1::Fq::from(x.value().unwrap_or_default());
                 let y = ark_secp256k1::Fq::from(y.value().unwrap_or_default());
-                let s = (x * x * ark_secp256k1::Fq::from(3u8)) / (y + y);
+                
+                let s = (x * x * ark_secp256k1::Fq::from(3u8)) * (y + y).inverse().unwrap_or_default();
                 let xx = s * s - x - x;
                 let yy = s * (x - xx) - y;
 
@@ -228,10 +229,8 @@ impl<F: PrimeField, const W: usize> HFieldGadget<F> for PointVar<F, W> {
         let (y0, y1) = y_bits.split_at(128);
         CRHGadget::hash(
             pp,
-            Boolean::le_bits_to_fp_var(x0)?,
-            Boolean::le_bits_to_fp_var(x1)?,
-            Boolean::le_bits_to_fp_var(y0)?,
-            Boolean::le_bits_to_fp_var(y1)?,
+            CRHGadget::hash(pp, Boolean::le_bits_to_fp_var(x0)?, Boolean::le_bits_to_fp_var(x1)?)?,
+            CRHGadget::hash(pp, Boolean::le_bits_to_fp_var(y0)?, Boolean::le_bits_to_fp_var(y1)?)?,
         )
     }
 }
@@ -330,10 +329,9 @@ mod tests {
     use ark_bn254::{Bn254, Fr};
     use ark_ec::{AffineRepr, CurveGroup};
     use ark_ff::UniformRand;
-    use ark_groth16::{
-        create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
-    };
+    use ark_groth16::Groth16;
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
+    use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
     use num::Num;
     use rand::{thread_rng, RngCore};
 
@@ -497,18 +495,23 @@ mod tests {
         let sk = ark_secp256k1::Fr::from_be_bytes_mod_order(&sk_buf);
         let pk = (ark_secp256k1::Affine::generator() * sk).into_affine();
 
-        let params = generate_random_parameters::<Bn254, _, _>(
+        let (ek, vk) = Groth16::<Bn254>::setup(
             TestCircuit { sk: ark_secp256k1::Fr::rand(rng), pk: ark_secp256k1::Affine::rand(rng) },
             rng,
         )
         .unwrap();
 
-        let pvk = prepare_verifying_key(&params.vk);
+        let pvk = Groth16::<Bn254>::process_vk(&vk).unwrap();
         let now = Instant::now();
-        let proof = create_random_proof(TestCircuit { sk, pk }, &params, rng).unwrap();
+        let proof = Groth16::<Bn254>::prove(&ek, TestCircuit { sk, pk }, rng).unwrap();
         println!("proof time: {:?}", now.elapsed());
 
-        assert!(verify_proof(&pvk, &proof, &PointVar::<Fr, W>::inputize(&pk)).unwrap());
+        assert!(Groth16::<Bn254>::verify_with_processed_vk(
+            &pvk,
+            &PointVar::<Fr, W>::inputize(&pk),
+            &proof
+        )
+        .unwrap());
         Ok(())
     }
 }

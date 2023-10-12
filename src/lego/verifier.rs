@@ -1,7 +1,7 @@
 use core::ops::{AddAssign, Neg};
 
-use ark_ff::PrimeField;
 use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
+use ark_ff::PrimeField;
 use ark_relations::r1cs::SynthesisError;
 
 use super::{
@@ -54,7 +54,10 @@ pub fn verify_qap_proof<E: Pairing>(
     c: E::G1Affine,
     d: E::G1Affine,
 ) -> Result<bool, SynthesisError> {
-    let qap = E::multi_miller_loop([a, c, d], [b.into(), pvk.delta_g2_neg_pc.clone(), pvk.gamma_g2_neg_pc.clone()]);
+    let qap = E::multi_miller_loop(
+        [a, c, d],
+        [b.into(), pvk.delta_g2_neg_pc.clone(), pvk.gamma_g2_neg_pc.clone()],
+    );
 
     Ok(E::final_exponentiation(qap).ok_or(SynthesisError::UnexpectedIdentity)?.0
         == pvk.alpha_g1_beta_g2)

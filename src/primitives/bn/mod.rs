@@ -612,7 +612,9 @@ mod tests {
         let b = BigUintVar::<Fr, W>::new_witness(cs.clone(), || {
             Ok((rng.gen_biguint_below(&m.value()?), 2048))
         })?;
-        let e = BigUintVar::<Fr, W>::new_witness(cs.clone(), || Ok((rng.gen_biguint_below(&(BigUint::from(65537u32))), 256)))?;
+        let e = BigUintVar::<Fr, W>::new_witness(cs.clone(), || {
+            Ok((rng.gen_biguint_below(&(BigUint::from(65537u32))), 256))
+        })?;
 
         println!("{}", cs.num_constraints());
         assert_eq!(
@@ -661,7 +663,7 @@ mod tests {
     //             let cs = ConstraintSystem::<Fr>::new_ref();
     //             let m = BigUintVar::<Fr, W>::constant(rng.gen_biguint_range(&(BigUint::one() << 2047), &((BigUint::one() << 2048) - BigUint::one())), 2048)?;
     //             let b = BigUintVar::<Fr, W>::new_witness(cs.clone(), || Ok((rng.gen_biguint_below(&m.value()?), 2048)))?;
-        
+
     //             let mut r = b.clone();
     //             for _ in 0..16 {
     //                 r = r.mul_no_carry(&r)?.rem(&m, &m.value()?)?;

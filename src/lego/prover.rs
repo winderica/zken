@@ -1,21 +1,19 @@
 use std::ops::Mul;
 
-use super::{
-    link::{PESubspaceSnark, SubspaceSnark},
-    r1cs_to_qap::LibsnarkReduction,
-    Proof, ProofWithLink, ProvingKeyCommon, ProvingKeyWithLink, VerifyingKey,
-};
-use ark_ec::{pairing::Pairing, VariableBaseMSM, AffineRepr, CurveGroup, Group};
+use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup, Group, VariableBaseMSM};
 use ark_ff::{PrimeField, UniformRand, Zero};
 use ark_poly::GeneralEvaluationDomain;
 use ark_relations::r1cs::{
     ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, OptimizationGoal, SynthesisError,
 };
-use ark_std::rand::Rng;
-use ark_std::{cfg_into_iter, cfg_iter, end_timer, start_timer, vec, vec::Vec};
-
-use super::r1cs_to_qap::R1CStoQAP;
+use ark_std::{cfg_into_iter, cfg_iter, end_timer, rand::Rng, start_timer, vec, vec::Vec};
 use rayon::prelude::*;
+
+use super::{
+    link::{PESubspaceSnark, SubspaceSnark},
+    r1cs_to_qap::{LibsnarkReduction, R1CStoQAP},
+    Proof, ProofWithLink, ProvingKeyCommon, ProvingKeyWithLink, VerifyingKey,
+};
 
 /// Same as `create_random_proof` but returns the CP_link and its corresponding proof as well. `link_v`
 /// is the blinding in CP_link
@@ -124,7 +122,10 @@ where
         witness_assignment,
     )?;
 
-    let g_d_link = cfg_iter!(link_v).zip_eq(&comm_wits).map(|(v, w)| (pk.vk.link_bases.0.mul(*w) + pk.vk.link_bases.1.mul(*v)).into_affine()).collect();
+    let g_d_link = cfg_iter!(link_v)
+        .zip_eq(&comm_wits)
+        .map(|(v, w)| (pk.vk.link_bases.0.mul(*w) + pk.vk.link_bases.1.mul(*v)).into_affine())
+        .collect();
 
     let mut ss_snark_witness = comm_wits;
     ss_snark_witness.extend_from_slice(link_v);
@@ -137,11 +138,7 @@ where
 
     drop(ss_snark_witness);
 
-    Ok(ProofWithLink {
-        groth16_proof: proof,
-        link_d: g_d_link,
-        link_pi,
-    })
+    Ok(ProofWithLink { groth16_proof: proof, link_d: g_d_link, link_pi })
 }
 
 /// Returns the proof and the committed witnesses.
@@ -169,9 +166,7 @@ where
     let v_repr = v.into_bigint();
 
     // Compute C
-    let aux_assignment = cfg_iter!(witness_assignment)
-        .map(|s| s.into_bigint())
-        .collect::<Vec<_>>();
+    let aux_assignment = cfg_iter!(witness_assignment).map(|s| s.into_bigint()).collect::<Vec<_>>();
 
     let committed_witnesses = &aux_assignment[..vk.commit_witness_count];
     let uncommitted_witnesses = &aux_assignment[vk.commit_witness_count..];
@@ -187,9 +182,8 @@ where
     let rs_repr = (r * s).into_bigint();
     let delta_g1_proj = pk_common.delta_g1.into_group();
 
-    let input_assignment_wth_one = cfg_iter!(input_assignment)
-        .map(|s| s.into_bigint())
-        .collect::<Vec<_>>();
+    let input_assignment_wth_one =
+        cfg_iter!(input_assignment).map(|s| s.into_bigint()).collect::<Vec<_>>();
 
     let mut assignment = vec![];
     assignment.extend_from_slice(&input_assignment_wth_one[1..]);
@@ -235,8 +229,7 @@ where
 
     let gamma_abc_inputs_source = &vk.gamma_abc_g1[input_assignment_wth_one.len()
         ..input_assignment_wth_one.len() + committed_witnesses.len()];
-    let gamma_abc_inputs_acc =
-        E::G1::msm_bigint(gamma_abc_inputs_source, &committed_witnesses);
+    let gamma_abc_inputs_acc = E::G1::msm_bigint(gamma_abc_inputs_source, &committed_witnesses);
 
     let v_eta_gamma_inv = vk.eta_gamma_inv_g1.into_group().mul_bigint(v_repr);
 
@@ -286,7 +279,8 @@ where
     end_timer!(lc_time);
 
     let witness_map_time = start_timer!(|| "R1CS to QAP witness map");
-    let h = QAP::witness_map::<E::ScalarField, GeneralEvaluationDomain<E::ScalarField>>(cs.clone())?;
+    let h =
+        QAP::witness_map::<E::ScalarField, GeneralEvaluationDomain<E::ScalarField>>(cs.clone())?;
     end_timer!(witness_map_time);
     Ok((cs, h))
 }

@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 
-use ark_ff::{BigInteger, BitIteratorLE, PrimeField};
+use ark_ff::PrimeField;
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_relations::r1cs::SynthesisError;
 use ark_std::{marker::PhantomData, vec::Vec};
-use num::{BigUint, Integer, One, Zero};
-use num_prime::nt_funcs::is_prime;
+use num::{BigUint, Zero};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -167,18 +166,18 @@ pub struct CRH<F: PrimeField> {
 }
 
 impl<F: PrimeField> CRH<F> {
-    pub fn hash(pp: &PoseidonParameters<F>, a: F, b: F, c: F, d: F) -> F {
-        let mut state = [F::from(1u128 << 66), a, b, c, d];
+    pub fn hash(pp: &PoseidonParameters<F>, a: F, b: F) -> F {
+        let mut state = [F::from(1u128 << 66), a, b];
         PoseidonSponge::permute(pp, &mut state);
-        state[4]
+        state[WIDTH - 1]
     }
 
     pub fn hash_vec(pp: &PoseidonParameters<F>, v: &[F]) -> F {
-        assert_eq!(v.len(), 4);
+        assert_eq!(v.len(), WIDTH - 1);
         let mut state = vec![F::from(1u128 << 66)];
         state.extend_from_slice(v);
         PoseidonSponge::permute(pp, &mut state);
-        state[4]
+        state[WIDTH - 1]
     }
 }
 
@@ -188,7 +187,7 @@ pub struct Encryption<F: PrimeField> {
 
 impl<F: PrimeField> Encryption<F> {
     pub fn encrypt(pp: &PoseidonParameters<F>, m: Vec<F>, k: F, nonce: F) -> Vec<F> {
-        let mut state = vec![F::from(1u64 << 32), k, nonce, F::zero(), F::zero()];
+        let mut state = vec![F::from(1u64 << 32), k, nonce];
         let mut c = vec![];
         for chunk in m.chunks(WIDTH - 1) {
             PoseidonSponge::permute(pp, &mut state);
@@ -203,7 +202,7 @@ impl<F: PrimeField> Encryption<F> {
     }
 
     pub fn decrypt(pp: &PoseidonParameters<F>, mut c: Vec<F>, k: F, nonce: F) -> Option<Vec<F>> {
-        let mut state = vec![F::from(1u64 << 32), k, nonce, F::zero(), F::zero()];
+        let mut state = vec![F::from(1u64 << 32), k, nonce];
         let mut m = vec![];
         let tag = c.pop().unwrap();
         for chunk in c.chunks(WIDTH - 1) {
@@ -219,246 +218,4 @@ impl<F: PrimeField> Encryption<F> {
         }
         Some(m)
     }
-}
-
-pub struct HPrime {
-}
-
-impl HPrime {
-    pub const EXTENSIONS: [(usize, usize, usize); 4] =
-        [(11, 25, 4), (11, 24, 4), (12, 63, 3), (13, 80, 2)];
-    pub const OUTPUT_WIDTH: usize = 252;
-
-    fn attempt_pocklington_base(
-        &(nonce_bits, random_bits, one_bits): &(usize, usize, usize),
-        entropy_source: &mut Vec<bool>,
-    ) -> (BigUint, u64) {
-        let v = {
-            let mut acc = BigUint::zero();
-            for i in 0..random_bits {
-                acc.set_bit(i as u64, entropy_source.pop().unwrap());
-            }
-            for i in 0..one_bits {
-                acc.set_bit((i + random_bits) as u64, true);
-            }
-            acc << nonce_bits
-        };
-        for nonce in (1u64 << (nonce_bits - 1))..(1u64 << nonce_bits) {
-            if (nonce & 0b11) == 0b11 {
-                let base = &v + nonce;
-                if is_prime(&base, None).probably() {
-                    return (base, nonce);
-                }
-            }
-        }
-        unreachable!()
-    }
-
-    fn attempt_pocklington_extension(
-        prime: &BigUint,
-        &(nonce_bits, random_bits, one_bits): &(usize, usize, usize),
-        entropy_source: &mut Vec<bool>,
-    ) -> (BigUint, u64) {
-        let v = {
-            let mut acc = BigUint::zero();
-            for i in 0..random_bits {
-                acc.set_bit(i as u64, entropy_source.pop().unwrap());
-            }
-            for i in 0..one_bits {
-                acc.set_bit((i + random_bits) as u64, true);
-            }
-            acc << nonce_bits
-        };
-        for nonce in (1u64 << (nonce_bits - 1))..(1u64 << nonce_bits) {
-            let extension = &v + nonce;
-            let number = prime * &extension + BigUint::one();
-            let part = BigUint::from(2u8).modpow(&extension, &number);
-            if part.modpow(prime, &number).is_one()
-                && (&part - BigUint::one()).gcd(&number).is_one()
-            {
-                return (number, nonce);
-            }
-        }
-        unreachable!()
-    }
-
-    pub fn find_hash<F: PrimeField>(
-        pp: &PoseidonParameters<F>,
-        a: F,
-        b: F,
-        c: F,
-        d: F,
-    ) -> (F, Vec<Vec<bool>>) {
-        let hash = CRH::hash(pp, a, b, c, d);
-        let mut entropy_source = hash.into_bigint().to_bits_le();
-        entropy_source.resize(F::MODULUS_BIT_SIZE as usize, false);
-        let mut nonces = vec![];
-        let (base_prime, base_nonce) =
-            Self::attempt_pocklington_base(&Self::EXTENSIONS[0], &mut entropy_source);
-        let mut prime = base_prime;
-        nonces.push(BitIteratorLE::without_trailing_zeros([base_nonce]).collect());
-        for extension in &Self::EXTENSIONS[1..] {
-            let ext = Self::attempt_pocklington_extension(&prime, extension, &mut entropy_source);
-            prime = ext.0;
-            nonces.push(BitIteratorLE::without_trailing_zeros([ext.1]).collect());
-        }
-        (F::from(prime), nonces)
-    }
-
-    pub fn hash<F: PrimeField>(
-        pp: &PoseidonParameters<F>,
-        a: F,
-        b: F,
-        c: F,
-        d: F,
-        nonces: &[Vec<bool>],
-    ) -> F {
-        let hash = CRH::hash(pp, a, b, c, d);
-        let mut entropy_source = hash.into_bigint().to_bits_le();
-        entropy_source.resize(F::MODULUS_BIT_SIZE as usize, false);
-        let mut extensions =
-            Self::EXTENSIONS.iter().zip(nonces).map(|(&(_, random_bits, one_bits), nonce)| {
-                BigUint::from_radix_le(
-                    &[
-                        nonce.iter().map(|&i| i as u8).collect(),
-                        entropy_source
-                            .drain(entropy_source.len() - random_bits..)
-                            .rev()
-                            .map(|i| i as u8)
-                            .collect(),
-                        vec![1; one_bits],
-                    ]
-                    .concat(),
-                    2,
-                )
-                .unwrap()
-            });
-        let mut prime = extensions.next().unwrap();
-        for extension in extensions {
-            assert!(extension < prime);
-            prime = prime * extension + BigUint::one();
-        }
-        F::from(prime)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use num_prime::RandPrime;
-    use rand::thread_rng;
-    use rayon::prelude::{IntoParallelIterator, ParallelIterator};
-
-    use super::*;
-
-    // #[test]
-    // fn test_round0() {
-    //     const O: usize = 4;
-    //     const N: usize = 11;
-    //     const R: usize = 40 - N - O;
-    //     (0u64..(1 << R)).into_par_iter().for_each(|i| {
-    //         let v = {
-    //             let mut acc = BigUint::from(i);
-    //             for i in 0..O {
-    //                 acc.set_bit((i + R) as u64, true);
-    //             }
-    //             acc << N
-    //         };
-    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
-    //             if (nonce & 0b11) == 0b11 {
-    //                 let base = &v + nonce;
-    //                 if is_prime(&base, None).probably() {
-    //                     return;
-    //                 }
-    //             }
-    //         }
-    //         unreachable!()
-    //     });
-    // }
-
-    // #[test]
-    // fn test_round1() {
-    //     let rng = &mut thread_rng();
-    //     const O: usize = 4;
-    //     const N: usize = 11;
-    //     const R: usize = 40 - N - O;
-    //     let prime = rng.gen_prime_exact(40, None);
-    //     (0u64..(1 << R)).into_par_iter().for_each(|i| {
-    //         let v = {
-    //             let mut acc = BigUint::from(i);
-    //             for i in 0..O {
-    //                 acc.set_bit((i + R) as u64, true);
-    //             }
-    //             acc << N
-    //         };
-    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
-    //             let extension = &v + nonce;
-    //             let number = &prime * &extension + BigUint::one();
-    //             let part = BigUint::from(2u8).modpow(&extension, &number);
-    //             if part.modpow(&prime, &number).is_one()
-    //                 && (&part - BigUint::one()).gcd(&number).is_one()
-    //             {
-    //                 return;
-    //             }
-    //         }
-    //         unreachable!()
-    //     });
-    // }
-
-    // #[test]
-    // fn test_round2() {
-    //     let rng = &mut thread_rng();
-    //     const O: usize = 3;
-    //     const N: usize = 12;
-    //     const R: usize = 78 - N - O;
-    //     let prime = rng.gen_prime_exact(79, None);
-    //     (0u64..(1 << R)).into_par_iter().for_each(|i| {
-    //         let v = {
-    //             let mut acc = BigUint::from(i);
-    //             for i in 0..O {
-    //                 acc.set_bit((i + R) as u64, true);
-    //             }
-    //             acc << N
-    //         };
-    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
-    //             let extension = &v + nonce;
-    //             let number = &prime * &extension + BigUint::one();
-    //             let part = BigUint::from(2u8).modpow(&extension, &number);
-    //             if part.modpow(&prime, &number).is_one()
-    //                 && (&part - BigUint::one()).gcd(&number).is_one()
-    //             {
-    //                 return;
-    //             }
-    //         }
-    //         unreachable!()
-    //     });
-    // }
-
-    // #[test]
-    // fn test_round3() {
-    //     let rng = &mut thread_rng();
-    //     const O: usize = 2;
-    //     const N: usize = 13;
-    //     const R: usize = 80;
-    //     let prime = rng.gen_prime_exact(157, None);
-    //     (0u128..(1 << R)).into_par_iter().for_each(|i| {
-    //         let v = {
-    //             let mut acc = BigUint::from(i);
-    //             for i in 0..O {
-    //                 acc.set_bit((i + R) as u64, true);
-    //             }
-    //             acc << N
-    //         };
-    //         for nonce in (1u64 << (N - 1))..(1u64 << N) {
-    //             let extension = &v + nonce;
-    //             let number = &prime * &extension + BigUint::one();
-    //             let part = BigUint::from(2u8).modpow(&extension, &number);
-    //             if part.modpow(&prime, &number).is_one()
-    //                 && (&part - BigUint::one()).gcd(&number).is_one()
-    //             {
-    //                 return;
-    //             }
-    //         }
-    //         unreachable!()
-    //     });
-    // }
 }

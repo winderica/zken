@@ -1,27 +1,21 @@
 use ark_ec::pairing::Pairing;
 use ark_ff::{BigInteger, PrimeField};
-use ark_r1cs_std::{
-    fields::fp::FpVar,
-    prelude::{Boolean, FieldVar},
-    ToBitsGadget,
-};
+use ark_r1cs_std::{fields::fp::FpVar, prelude::Boolean, ToBitsGadget};
 use ark_relations::r1cs::SynthesisError;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::{
-    lego::{generate_random_parameters_incl_cp_link, LinkPublicGenerators, ProvingKeyWithLink},
+    lego::LinkPublicGenerators,
     primitives::{
-        accumulator,
-        poseidon::{
-            constraints::{CRHGadget, HPrimeGadget},
-            HPrime, PoseidonParameters, CRH,
-        },
+        poseidon::{constraints::CRHGadget, PoseidonParameters, CRH},
         secp256k1::constraints::SecretKeyVar,
     },
-    proofs::{bind_id, pt_form, range, recv, sn_form, sn_range},
+    proofs::{
+        bind_id::BindIdCircuit, pt_form::PTCircuit, recv::RecvCircuit, sn_form::SNCircuit,
+        ProofSystem,
+    },
 };
 
 pub mod mint;
@@ -34,79 +28,38 @@ pub struct Params<E: Pairing> {
     #[serde_as(as = "_")]
     pub h: PoseidonParameters<E::ScalarField>,
     #[serde_as(as = "_")]
-    pub r: accumulator::Parameters,
-    #[serde_as(as = "_")]
     pub c: LinkPublicGenerators<E>,
 }
 
 impl<E: Pairing> Default for Params<E> {
     fn default() -> Self {
         let rng = &mut thread_rng();
-        Self {
-            h: Default::default(),
-            r: accumulator::Parameters::new(rng),
-            c: LinkPublicGenerators::new(rng),
-        }
+        Self { h: Default::default(), c: LinkPublicGenerators::new(rng) }
     }
 }
 
-#[derive(CanonicalSerialize, CanonicalDeserialize)]
-pub struct CRS<E: Pairing> {
-    pub pt_form: ProvingKeyWithLink<E>,
-    pub sn_form: ProvingKeyWithLink<E>,
-    pub sn_range: ProvingKeyWithLink<E>,
-    pub recv: ProvingKeyWithLink<E>,
-    pub range: ProvingKeyWithLink<E>,
-    pub bind_id: ProvingKeyWithLink<E>,
+pub struct GlobalCRS<'a, E: Pairing> {
+    pub pt_form: ProofSystem<'a, E, PTCircuit<'a, E>>,
+    pub sn_form: ProofSystem<'a, E, SNCircuit<'a, E>>,
+    pub recv: ProofSystem<'a, E, RecvCircuit<'a, E>>,
+    pub bind_id: ProofSystem<'a, E, BindIdCircuit<'a, E>>,
 }
 
-impl<E: Pairing> CRS<E> {
-    pub fn setup<R: Rng>(pp: &Params<E>, rng: &mut R) -> Result<Self, SynthesisError> {
+impl<'a, E: Pairing> GlobalCRS<'a, E> {
+    pub fn setup<R: Rng>(pp: &'a Params<E>, rng: &mut R) -> Result<Self, SynthesisError> {
         Ok(Self {
-            pt_form: generate_random_parameters_incl_cp_link(
-                pt_form::Circuit { pp, w: Default::default() },
-                &pp.c,
-                3,
-                rng,
-            )?,
-            sn_form: generate_random_parameters_incl_cp_link(
-                sn_form::Circuit { pp, w: Default::default() },
-                &pp.c,
-                3,
-                rng,
-            )?,
-            sn_range: generate_random_parameters_incl_cp_link(
-                sn_range::Circuit { pp, w: Default::default() },
-                &pp.c,
-                2,
-                rng,
-            )?,
-            recv: generate_random_parameters_incl_cp_link(
-                recv::Circuit { pp, s: Default::default(), w: Default::default() },
-                &pp.c,
-                1,
-                rng,
-            )?,
-            range: generate_random_parameters_incl_cp_link(
-                range::Circuit { pp, s: Default::default(), w: Default::default() },
-                &pp.c,
-                1,
-                rng,
-            )?,
-            bind_id: generate_random_parameters_incl_cp_link(
-                bind_id::Circuit { pp, s: Default::default(), w: Default::default() },
-                &pp.c,
-                1,
-                rng,
-            )?,
+            pt_form: ProofSystem::setup(&pp, rng)?,
+            sn_form: ProofSystem::setup(&pp, rng)?,
+            recv: ProofSystem::setup(&pp, rng)?,
+            bind_id: ProofSystem::setup(&pp, rng)?,
         })
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct SecretToken<F: PrimeField> {
     pub v: F,
-    pub rho_pt: F,
-    pub aux_pt: Vec<Vec<bool>>,
+    pub rho: F,
 }
 
 pub struct TK {}
@@ -115,9 +68,9 @@ impl TK {
         pp: &Params<E>,
         h_apk: E::ScalarField,
         v: E::ScalarField,
-        rho_pt: E::ScalarField,
-    ) -> (E::ScalarField, Vec<Vec<bool>>) {
-        HPrime::find_hash(&pp.h, h_apk, v, rho_pt, Default::default())
+        rho: E::ScalarField,
+    ) -> E::ScalarField {
+        CRH::hash(&pp.h, CRH::hash(&pp.h, h_apk, v), rho)
     }
 }
 
@@ -128,10 +81,9 @@ impl TokenGadget {
         pp: &Params<E>,
         h_apk: FpVar<E::ScalarField>,
         v: FpVar<E::ScalarField>,
-        rho_pt: FpVar<E::ScalarField>,
-        aux_pt: &[Vec<Boolean<E::ScalarField>>],
+        rho: FpVar<E::ScalarField>,
     ) -> Result<FpVar<E::ScalarField>, SynthesisError> {
-        HPrimeGadget::hash::<E::ScalarField, W>(&pp.h, h_apk, v, rho_pt, FpVar::zero(), aux_pt)
+        CRHGadget::hash(&pp.h, CRHGadget::hash(&pp.h, h_apk, v)?, rho)
     }
 }
 
@@ -146,10 +98,8 @@ impl SN {
 
         let h = CRH::hash(
             &pp.h,
-            F::from_le_bytes_mod_order(sk0),
-            F::from_le_bytes_mod_order(sk1),
+            CRH::hash(&pp.h, F::from_le_bytes_mod_order(sk0), F::from_le_bytes_mod_order(sk1)),
             pt,
-            Default::default(),
         );
         let h_bits = h.into_bigint().to_bits_le();
         F::from_bigint(F::BigInt::from_bits_le(&h_bits[1..])).unwrap()
@@ -170,41 +120,14 @@ impl SNGadget {
         let (sk0, sk1) = sk.0.split_at(128);
         let h = CRHGadget::hash(
             &pp.h,
-            Boolean::le_bits_to_fp_var(sk0)?,
-            Boolean::le_bits_to_fp_var(sk1)?,
+            CRHGadget::hash(
+                &pp.h,
+                Boolean::le_bits_to_fp_var(sk0)?,
+                Boolean::le_bits_to_fp_var(sk1)?,
+            )?,
             pt,
-            FpVar::zero(),
         )?;
         let h_bits = h.to_bits_le()?;
         Boolean::le_bits_to_fp_var(&h_bits[1..])
-    }
-}
-
-pub struct SNRange {}
-
-impl SNRange {
-    pub fn h_range_gen<E: Pairing, F: PrimeField>(
-        pp: &Params<E>,
-        range: (F, F),
-    ) -> (F, Vec<Vec<bool>>)
-    where
-        E: Pairing<ScalarField = F>,
-    {
-        HPrime::find_hash(&pp.h, range.0, range.1, Default::default(), Default::default())
-    }
-}
-
-pub struct SNRangeGadget {}
-
-impl SNRangeGadget {
-    pub fn h_range_gen<E: Pairing, F: PrimeField, const W: usize>(
-        pp: &Params<E>,
-        range: (FpVar<F>, FpVar<F>),
-        aux_range: &[Vec<Boolean<F>>],
-    ) -> Result<FpVar<F>, SynthesisError>
-    where
-        E: Pairing<ScalarField = F>,
-    {
-        HPrimeGadget::hash::<F, W>(&pp.h, range.0, range.1, FpVar::zero(), FpVar::zero(), aux_range)
     }
 }

@@ -1,6 +1,8 @@
 //! Utils for matrix and vector operations
 
-use ark_ec::{pairing::Pairing, AffineRepr, scalar_mul::fixed_base::FixedBase, VariableBaseMSM, CurveGroup};
+use ark_ec::{
+    pairing::Pairing, scalar_mul::fixed_base::FixedBase, AffineRepr, CurveGroup, VariableBaseMSM,
+};
 use ark_ff::{PrimeField, Zero};
 use ark_std::{
     cfg_iter,
@@ -63,10 +65,7 @@ pub struct SparseLinAlgebra<PE: Pairing> {
 impl<PE: Pairing> SparseLinAlgebra<PE> {
     /// Inner product of a column of a sparse matrix and another (sparse) vector
     /// this is basically a multi-exp
-    pub fn sparse_inner_product(
-        v: &Vec<PE::ScalarField>,
-        w: &Col<PE::G1Affine>,
-    ) -> PE::G1Affine {
+    pub fn sparse_inner_product(v: &Vec<PE::ScalarField>, w: &Col<PE::G1Affine>) -> PE::G1Affine {
         let mut res = PE::G1::zero();
         for coeffpos in w {
             let g = coeffpos.val;
@@ -104,7 +103,10 @@ pub fn inner_product<PE: Pairing>(a: &[PE::ScalarField], b: &[PE::G1Affine]) -> 
 }
 
 /// Scale given vector `v` by scalar `a`
-pub fn scale_vector<PE: Pairing>(a: &PE::ScalarField, v: &[PE::ScalarField]) -> Vec<PE::ScalarField> {
+pub fn scale_vector<PE: Pairing>(
+    a: &PE::ScalarField,
+    v: &[PE::ScalarField],
+) -> Vec<PE::ScalarField> {
     let mut res: Vec<PE::ScalarField> = Vec::with_capacity(v.len());
     for i in 0..v.len() {
         let x: PE::ScalarField = a.mul(&v[i]);

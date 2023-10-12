@@ -1,6 +1,8 @@
 use ark_ec::pairing::Pairing;
-use ark_ff::PrimeField;
-use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar};
+use ark_ff::{PrimeField, BigInteger};
+use ark_r1cs_std::{
+    alloc::AllocVar, eq::EqGadget, fields::fp::FpVar, ToBitsGadget,
+};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -8,12 +10,13 @@ use serde_with::serde_as;
 use crate::{
     constants::W,
     primitives::{
-        poseidon::HFieldGadget,
+        poseidon::{constraints::CRHGadget, HFieldGadget},
         secp256k1::constraints::{PointVar, Secp256k1Gadget, SecretKeyVar},
     },
+    proofs::Circuit,
     protocols::Params,
+    utils::num_constraints,
 };
-
 #[serde_as]
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Statement {
@@ -21,43 +24,66 @@ pub struct Statement {
     pub wpk: ark_secp256k1::Affine,
 }
 
-impl Statement {
-    pub fn inputize<F: PrimeField>(&self) -> Vec<F> {
-        PointVar::<F, W>::inputize(&self.wpk)
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct Witness<F: PrimeField> {
     pub h_apk: F,
     pub delta: ark_secp256k1::Fr,
+    pub wsk: ark_secp256k1::Fr,
 }
 
-pub struct Circuit<'a, E: Pairing> {
+pub struct BindIdCircuit<'a, E: Pairing> {
     pub pp: &'a Params<E>,
     pub s: Statement,
     pub w: Witness<E::ScalarField>,
 }
 
-impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for Circuit<'a, E> {
+impl<'a, E: Pairing> Circuit<'a, E> for BindIdCircuit<'a, E> {
+    const NUM_COMMIT_WITNESSES: usize = 1;
+    const NAME: &'static str = "BindId";
+    type Statement = Statement;
+    type Witness = Witness<E::ScalarField>;
+
+    fn new(pp: &'a Params<E>, s: Self::Statement, w: Self::Witness) -> Self {
+        Self { pp, s, w }
+    }
+
+    fn inputize(s: &Self::Statement) -> Vec<E::ScalarField> {
+        PointVar::<E::ScalarField, W>::inputize(&s.wpk)
+    }
+}
+
+impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for BindIdCircuit<'a, E> {
     fn generate_constraints(
         self,
         cs: ConstraintSystemRef<E::ScalarField>,
     ) -> ark_relations::r1cs::Result<()> {
         let Self { s, w, pp } = self;
         let Statement { wpk } = s;
-        let Witness { h_apk, delta } = w;
+        let Witness { h_apk, delta, wsk } = w;
 
         let h_apk = FpVar::<E::ScalarField>::new_witness(cs.clone(), || Ok(h_apk))?;
-        let delta = SecretKeyVar::new_witness(cs.clone(), || Ok(delta))?;
+        let delta = FpVar::<E::ScalarField>::new_witness(cs.clone(), || Ok(E::ScalarField::from_le_bytes_mod_order(&delta.into_bigint().to_bytes_le())))?;
+        let wsk = FpVar::<E::ScalarField>::new_witness(cs.clone(), || Ok(E::ScalarField::from_le_bytes_mod_order(&wsk.into_bigint().to_bytes_le())))?;
 
         let wpk = PointVar::<E::ScalarField, W>::new_input(cs.clone(), || Ok(wpk))?;
 
-        wpk.add(&Secp256k1Gadget::pk_gen(&delta)?)?
-            .hash_to_field_var(&pp.h)?
-            .enforce_equal(&h_apk)?;
+        println!("Shape check: {}", cs.num_constraints());
 
-        println!("{}", cs.num_constraints());
+        println!(
+            "PK derivation: {}",
+            num_constraints(&cs, || {
+                let sk = CRHGadget::hash(
+                    &pp.h,
+                    wsk,
+                    delta,
+                )?.to_bits_le()?;
+                wpk.add(&Secp256k1Gadget::pk_gen(&SecretKeyVar(sk))?)?
+                    .hash_to_field_var(&pp.h)?
+                    .enforce_equal(&h_apk)
+            })?
+        );
+
+        println!("Total: {}", cs.num_constraints());
 
         Ok(())
     }
@@ -67,18 +93,14 @@ impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for Circuit<'a, E> {
 mod tests {
     use ark_bn254::{Bn254, Fr};
     use ark_ec::{AffineRepr, CurveGroup};
-    use ark_ff::UniformRand;
+    use ark_ff::{BigInteger, UniformRand};
     use ark_serialize::CanonicalSerialize;
     use rand::thread_rng;
 
     use super::*;
     use crate::{
-        lego::{
-            create_random_proof_incl_cp_link, generate_random_parameters_incl_cp_link,
-            prepare_verifying_key, verify_proof_incl_cp_link,
-        },
-        primitives::poseidon::HField,
-        utils::{OnChainVerifiable, ToTransaction},
+        primitives::poseidon::{HField, CRH},
+        proofs::ProofSystem,
     };
 
     #[test]
@@ -90,56 +112,35 @@ mod tests {
         let wsk = ark_secp256k1::Fr::rand(rng);
         let wpk = (ark_secp256k1::Affine::generator() * wsk).into_affine();
         let delta = ark_secp256k1::Fr::rand(rng);
-        let ask = wsk + delta;
+        let ask = ark_secp256k1::Fr::from_le_bytes_mod_order(
+            &CRH::hash(
+                &pp.h,
+                Fr::from_le_bytes_mod_order(&wsk.into_bigint().to_bytes_le()),
+                Fr::from_le_bytes_mod_order(&delta.into_bigint().to_bytes_le()),
+            )
+            .into_bigint()
+            .to_bytes_le(),
+        ) + wsk;
         let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
 
         let r_h_apk = Fr::rand(rng);
 
         let s = Statement { wpk };
-        let w = Witness { h_apk, delta };
-        let public_input = s.inputize();
+        let w = Witness { h_apk, delta, wsk };
 
-        let link_v = vec![r_h_apk];
+        let link_v = [r_h_apk];
 
-        let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-            Circuit { pp, s: Default::default(), w: Default::default() },
-            &pp.c,
-            link_v.len(),
-            rng,
-        )
-        .unwrap();
+        let crs = ProofSystem::<_, BindIdCircuit<_>>::setup(&pp, rng).unwrap();
 
-        println!("{}", params_link.compressed_size());
+        println!("{}", crs.pk.compressed_size());
 
-        let pvk_link = prepare_verifying_key(&params_link.vk.groth16_vk);
-        let proof_link = create_random_proof_incl_cp_link(
-            Circuit { pp, s, w },
-            Fr::rand(rng),
-            &link_v,
-            &params_link,
-            rng,
-        )
-        .unwrap();
+        let proof_link = crs.prove(s.clone(), w, &link_v, rng).unwrap();
 
         println!("{}", proof_link.compressed_size());
 
-        assert!(verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &public_input)
-            .unwrap());
+        assert!(crs.verify(&s, &proof_link).unwrap());
 
-        println!("{}", params_link.vk.to_on_chain_verifier("BindID"));
-        println!(
-            "{}",
-            vec![
-                proof_link.groth16_proof.a.to_tx(),
-                proof_link.groth16_proof.b.to_tx(),
-                proof_link.groth16_proof.c.to_tx(),
-                vec![proof_link.link_d, vec![proof_link.groth16_proof.d], vec![proof_link.link_pi]]
-                    .concat()
-                    .to_tx(),
-                public_input.to_tx()
-            ]
-            .join(",")
-        );
+        crs.print_on_chain(&s, &proof_link);
     }
 
     #[bench]
@@ -148,19 +149,7 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let r_h_apk = Fr::rand(rng);
-
-        let link_v = vec![r_h_apk];
-
-        b.iter(|| {
-            generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-                Circuit { pp, w: Default::default(), s: Default::default() },
-                &pp.c,
-                link_v.len(),
-                rng,
-            )
-            .unwrap()
-        });
+        b.iter(|| ProofSystem::<_, BindIdCircuit<_>>::setup(&pp, rng).unwrap());
     }
 
     #[bench]
@@ -172,34 +161,27 @@ mod tests {
         let wsk = ark_secp256k1::Fr::rand(rng);
         let wpk = (ark_secp256k1::Affine::generator() * wsk).into_affine();
         let delta = ark_secp256k1::Fr::rand(rng);
-        let ask = wsk + delta;
+        let ask = ark_secp256k1::Fr::from_le_bytes_mod_order(
+            &CRH::hash(
+                &pp.h,
+                Fr::from_le_bytes_mod_order(&wsk.into_bigint().to_bytes_le()),
+                Fr::from_le_bytes_mod_order(&delta.into_bigint().to_bytes_le()),
+            )
+            .into_bigint()
+            .to_bytes_le(),
+        ) + wsk;
         let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
 
         let r_h_apk = Fr::rand(rng);
 
         let s = Statement { wpk };
-        let w = Witness { h_apk, delta };
+        let w = Witness { h_apk, delta, wsk };
 
-        let link_v = vec![r_h_apk];
+        let link_v = [r_h_apk];
 
-        let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-            Circuit { pp, s: Default::default(), w: Default::default() },
-            &pp.c,
-            link_v.len(),
-            rng,
-        )
-        .unwrap();
+        let crs = ProofSystem::<_, BindIdCircuit<_>>::setup(&pp, rng).unwrap();
 
-        b.iter(|| {
-            create_random_proof_incl_cp_link(
-                Circuit { pp, s: s.clone(), w: w.clone() },
-                Fr::rand(rng),
-                &link_v,
-                &params_link,
-                rng,
-            )
-            .unwrap()
-        });
+        b.iter(|| crs.prove(s.clone(), w.clone(), &link_v, rng).unwrap());
     }
 
     #[bench]
@@ -211,39 +193,28 @@ mod tests {
         let wsk = ark_secp256k1::Fr::rand(rng);
         let wpk = (ark_secp256k1::Affine::generator() * wsk).into_affine();
         let delta = ark_secp256k1::Fr::rand(rng);
-        let ask = wsk + delta;
+        let ask = ark_secp256k1::Fr::from_le_bytes_mod_order(
+            &CRH::hash(
+                &pp.h,
+                Fr::from_le_bytes_mod_order(&wsk.into_bigint().to_bytes_le()),
+                Fr::from_le_bytes_mod_order(&delta.into_bigint().to_bytes_le()),
+            )
+            .into_bigint()
+            .to_bytes_le(),
+        ) + wsk;
         let h_apk = (ark_secp256k1::Affine::generator() * ask).hash_to_field(&pp.h);
 
         let r_h_apk = Fr::rand(rng);
 
         let s = Statement { wpk };
-        let w = Witness { h_apk, delta };
-        let public_input = s.inputize();
+        let w = Witness { h_apk, delta, wsk };
 
-        let link_v = vec![r_h_apk];
+        let link_v = [r_h_apk];
 
-        let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-            Circuit { pp, s: Default::default(), w: Default::default() },
-            &pp.c,
-            link_v.len(),
-            rng,
-        )
-        .unwrap();
+        let crs = ProofSystem::<_, BindIdCircuit<_>>::setup(&pp, rng).unwrap();
 
-        let pvk_link = prepare_verifying_key(&params_link.vk.groth16_vk);
+        let proof_link = crs.prove(s.clone(), w, &link_v, rng).unwrap();
 
-        let proof_link = create_random_proof_incl_cp_link(
-            Circuit { pp, s, w },
-            Fr::rand(rng),
-            &link_v,
-            &params_link,
-            rng,
-        )
-        .unwrap();
-
-        b.iter(|| {
-            verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &public_input)
-                .unwrap()
-        })
+        b.iter(|| crs.verify(&s, &proof_link).unwrap())
     }
 }

@@ -9,8 +9,8 @@ mod test {
     use std::ops::Add;
 
     use ark_bn254::{Bn254, Fr, G1Affine, G1Projective, G2Projective};
-    use ark_ec::{CurveGroup, AffineRepr, Group};
-    use ark_ff::{One, UniformRand, Zero, PrimeField};
+    use ark_ec::{AffineRepr, CurveGroup, Group};
+    use ark_ff::{One, PrimeField, UniformRand, Zero};
     use ark_std::rand::{rngs::StdRng, SeedableRng};
 
     use super::{PESubspaceSnark, SparseMatrix, SubspaceSnark, PP};
@@ -106,8 +106,10 @@ mod test {
         let w: Vec<Fr> = vec![Fr::rand(&mut rng), Fr::rand(&mut rng), Fr::rand(&mut rng)];
 
         let x: Vec<G1Affine> = vec![
-            bases1[0].into_group().mul_bigint(w[0].into_bigint()) + bases1[1].mul_bigint(w[2].into_bigint()),
-            bases2[0].into_group().mul_bigint(w[1].into_bigint()) + bases2[1].mul_bigint(w[2].into_bigint()),
+            bases1[0].into_group().mul_bigint(w[0].into_bigint())
+                + bases1[1].mul_bigint(w[2].into_bigint()),
+            bases2[0].into_group().mul_bigint(w[1].into_bigint())
+                + bases2[1].mul_bigint(w[2].into_bigint()),
         ]
         .into_iter()
         .map(|p| p.into_affine())

@@ -2,59 +2,88 @@ use ark_ec::pairing::Pairing;
 use ark_ff::PrimeField;
 use ark_r1cs_std::{alloc::AllocVar, fields::fp::FpVar, prelude::EqGadget};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     constants::W,
-    primitives::poseidon::HPrime,
+    primitives::mt::{
+        constraints::{IndexedMTGadget, IndexedMTProofVar},
+        IndexedMTProof,
+    },
+    proofs::Circuit,
     protocols::{Params, TokenGadget},
+    utils::num_constraints,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Witness<F: PrimeField> {
     pub pt: F,
     pub v: F,
     pub h_apk: F,
-    pub rho_pt: F,
-    pub aux_pt: Vec<Vec<bool>>,
+    pub rho: F,
+    pub pt_mem: IndexedMTProof<F, 32>,
 }
 
-impl<F: PrimeField> Default for Witness<F> {
-    fn default() -> Self {
-        Self {
-            pt: Default::default(),
-            v: Default::default(),
-            h_apk: Default::default(),
-            rho_pt: Default::default(),
-            aux_pt: HPrime::EXTENSIONS.iter().map(|(n, _, _)| vec![false; *n]).collect(),
-        }
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Statement<F: PrimeField> {
+    pub pt_acc: F,
+}
+
+pub struct PTCircuit<'a, E: Pairing> {
+    pub pp: &'a Params<E>,
+    pub w: Witness<E::ScalarField>,
+    pub s: Statement<E::ScalarField>,
+}
+
+impl<'a, E: Pairing> Circuit<'a, E> for PTCircuit<'a, E> {
+    const NUM_COMMIT_WITNESSES: usize = 3;
+    const NAME: &'static str = "PT";
+    type Statement = Statement<E::ScalarField>;
+    type Witness = Witness<E::ScalarField>;
+
+    fn new(pp: &'a Params<E>, s: Self::Statement, w: Self::Witness) -> Self {
+        Self { pp, s, w }
+    }
+
+    fn inputize(s: &Self::Statement) -> Vec<E::ScalarField> {
+        vec![s.pt_acc]
     }
 }
 
-pub struct Circuit<'a, E: Pairing> {
-    pub pp: &'a Params<E>,
-    pub w: Witness<E::ScalarField>,
-}
-
-impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for Circuit<'a, E> {
+impl<'a, E: Pairing> ConstraintSynthesizer<E::ScalarField> for PTCircuit<'a, E> {
     fn generate_constraints(
         self,
         cs: ConstraintSystemRef<E::ScalarField>,
     ) -> ark_relations::r1cs::Result<()> {
-        let Self { pp, w } = self;
-        let Witness { pt, v, h_apk, rho_pt, aux_pt } = w;
+        let Self { pp, w, s } = self;
+        let Statement { pt_acc } = s;
+        let Witness { pt, v, h_apk, rho: rho_pt, pt_mem } = w;
 
         let v = FpVar::new_witness(cs.clone(), || Ok(v))?;
         let pt = FpVar::new_witness(cs.clone(), || Ok(pt))?;
         let h_apk = FpVar::new_witness(cs.clone(), || Ok(h_apk))?;
         let rho_pt = FpVar::new_witness(cs.clone(), || Ok(rho_pt))?;
-        let aux_pt = aux_pt
-            .iter()
-            .map(|x| Vec::new_witness(cs.clone(), || Ok(x.clone())))
-            .collect::<Result<Vec<_>, _>>()?;
+        let pt_mem = IndexedMTProofVar::new_witness(cs.clone(), || Ok(pt_mem))?;
 
-        pt.enforce_equal(&TokenGadget::pt_gen::<_, W>(pp, h_apk, v, rho_pt, &aux_pt)?)?;
+        let pt_acc = FpVar::new_input(cs.clone(), || Ok(pt_acc))?;
 
-        println!("{}", cs.num_constraints());
+        println!("Shape check: {}", cs.num_constraints());
+
+        println!(
+            "PT generation: {}",
+            num_constraints(&cs, || {
+                pt.enforce_equal(&TokenGadget::pt_gen::<_, W>(pp, h_apk, v, rho_pt)?)
+            })?
+        );
+        println!(
+            "PT membership: {}",
+            num_constraints(&cs, || {
+                pt_acc.enforce_equal(&IndexedMTGadget::calculate_root(&pp.h, &pt_mem)?)?;
+                pt_mem.leaf.0.enforce_equal(&pt)
+            })?
+        );
+
+        println!("Total: {}", cs.num_constraints());
 
         Ok(())
     }
@@ -70,13 +99,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        lego::{
-            create_random_proof_incl_cp_link, generate_random_parameters_incl_cp_link,
-            prepare_verifying_key, verify_proof_incl_cp_link,
-        },
-        primitives::poseidon::HField,
+        primitives::{mt::IndexedMT, poseidon::HField},
+        proofs::ProofSystem,
         protocols::TK,
-        utils::{OnChainVerifiable, ToTransaction},
     };
 
     #[test]
@@ -91,53 +116,33 @@ mod tests {
         let v = Fr::rand(rng);
         let rho_pt = Fr::rand(rng);
 
-        let (pt, aux_pt) = TK::pt_gen(pp, h_apk, v, rho_pt);
+        let mut tree = IndexedMT::<_, 32>::new(&pp.h);
+        for _ in 0..100 {
+            tree.insert(Fr::rand(rng));
+        }
+
+        let pt = TK::pt_gen(pp, h_apk, v, rho_pt);
+        tree.insert(pt);
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
         let r_h_apk = Fr::rand(rng);
 
-        let w = Witness { pt, v, h_apk, rho_pt, aux_pt };
-        let link_v = vec![r_v, r_pt, r_h_apk];
+        let s = Statement { pt_acc: tree.root() };
+        let w = Witness { pt, v, h_apk, rho: rho_pt, pt_mem: tree.prove(pt) };
+        let link_v = [r_v, r_pt, r_h_apk];
 
-        let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-            Circuit { pp, w: Default::default() },
-            &pp.c,
-            link_v.len(),
-            rng,
-        )
-        .unwrap();
+        let crs = ProofSystem::<_, PTCircuit<_>>::setup(&pp, rng).unwrap();
 
-        println!("{}", params_link.compressed_size());
+        println!("{}", crs.pk.compressed_size());
 
-        let pvk_link = prepare_verifying_key(&params_link.vk.groth16_vk);
-        let proof_link = create_random_proof_incl_cp_link(
-            Circuit { pp, w },
-            Fr::rand(rng),
-            &link_v,
-            &params_link,
-            rng,
-        )
-        .unwrap();
+        let proof_link = crs.prove(s.clone(), w, &link_v, rng).unwrap();
 
         println!("{}", proof_link.compressed_size());
 
-        assert!(verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &[]).unwrap());
+        assert!(crs.verify(&s, &proof_link).unwrap());
 
-        println!("{}", params_link.vk.to_on_chain_verifier("PTForm"));
-        println!(
-            "{}",
-            vec![
-                proof_link.groth16_proof.a.to_tx(),
-                proof_link.groth16_proof.b.to_tx(),
-                proof_link.groth16_proof.c.to_tx(),
-                vec![proof_link.link_d, vec![proof_link.groth16_proof.d], vec![proof_link.link_pi]]
-                    .concat()
-                    .to_tx(),
-                "[]".to_string()
-            ]
-            .join(",")
-        );
+        crs.print_on_chain(&s, &proof_link);
     }
 
     #[bench]
@@ -146,21 +151,7 @@ mod tests {
 
         let pp = &Params::<Bn254>::default();
 
-        let r_v = Fr::rand(rng);
-        let r_pt = Fr::rand(rng);
-        let r_h_apk = Fr::rand(rng);
-
-        let link_v = vec![r_v, r_pt, r_h_apk];
-
-        b.iter(|| {
-            generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-                Circuit { pp, w: Default::default() },
-                &pp.c,
-                link_v.len(),
-                rng,
-            )
-            .unwrap()
-        });
+        b.iter(|| ProofSystem::<_, PTCircuit<_>>::setup(&pp, rng).unwrap());
     }
 
     #[bench]
@@ -175,33 +166,25 @@ mod tests {
         let v = Fr::rand(rng);
         let rho_pt = Fr::rand(rng);
 
-        let (pt, aux_pt) = TK::pt_gen(pp, h_apk, v, rho_pt);
+        let mut tree = IndexedMT::<_, 32>::new(&pp.h);
+        for _ in 0..100 {
+            tree.insert(Fr::rand(rng));
+        }
+
+        let pt = TK::pt_gen(pp, h_apk, v, rho_pt);
+        tree.insert(pt);
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
         let r_h_apk = Fr::rand(rng);
 
-        let w = Witness { pt, v, h_apk, rho_pt, aux_pt };
-        let link_v = vec![r_v, r_pt, r_h_apk];
+        let s = Statement { pt_acc: tree.root() };
+        let w = Witness { pt, v, h_apk, rho: rho_pt, pt_mem: tree.prove(pt) };
+        let link_v = [r_v, r_pt, r_h_apk];
 
-        let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-            Circuit { pp, w: Default::default() },
-            &pp.c,
-            link_v.len(),
-            rng,
-        )
-        .unwrap();
+        let crs = ProofSystem::<_, PTCircuit<_>>::setup(&pp, rng).unwrap();
 
-        b.iter(|| {
-            create_random_proof_incl_cp_link(
-                Circuit { pp, w: w.clone() },
-                Fr::rand(rng),
-                &link_v,
-                &params_link,
-                rng,
-            )
-            .unwrap()
-        });
+        b.iter(|| crs.prove(s.clone(), w.clone(), &link_v, rng).unwrap());
     }
 
     #[bench]
@@ -216,33 +199,26 @@ mod tests {
         let v = Fr::rand(rng);
         let rho_pt = Fr::rand(rng);
 
-        let (pt, aux_pt) = TK::pt_gen(pp, h_apk, v, rho_pt);
+        let mut tree = IndexedMT::<_, 32>::new(&pp.h);
+        for _ in 0..100 {
+            tree.insert(Fr::rand(rng));
+        }
+
+        let pt = TK::pt_gen(pp, h_apk, v, rho_pt);
+        tree.insert(pt);
 
         let r_v = Fr::rand(rng);
         let r_pt = Fr::rand(rng);
         let r_h_apk = Fr::rand(rng);
 
-        let w = Witness { pt, v, h_apk, rho_pt, aux_pt };
-        let link_v = vec![r_v, r_pt, r_h_apk];
+        let s = Statement { pt_acc: tree.root() };
+        let w = Witness { pt, v, h_apk, rho: rho_pt, pt_mem: tree.prove(pt) };
+        let link_v = [r_v, r_pt, r_h_apk];
 
-        let params_link = generate_random_parameters_incl_cp_link::<Bn254, _, _>(
-            Circuit { pp, w: Default::default() },
-            &pp.c,
-            link_v.len(),
-            rng,
-        )
-        .unwrap();
+        let crs = ProofSystem::<_, PTCircuit<_>>::setup(&pp, rng).unwrap();
 
-        let pvk_link = prepare_verifying_key(&params_link.vk.groth16_vk);
-        let proof_link = create_random_proof_incl_cp_link(
-            Circuit { pp, w },
-            Fr::rand(rng),
-            &link_v,
-            &params_link,
-            rng,
-        )
-        .unwrap();
+        let proof_link = crs.prove(s.clone(), w, &link_v, rng).unwrap();
 
-        b.iter(|| verify_proof_incl_cp_link(&pvk_link, &params_link.vk, &proof_link, &[]).unwrap())
+        b.iter(|| crs.verify(&s, &proof_link).unwrap())
     }
 }

@@ -4,49 +4,11 @@ use ark_ec::{
     AffineRepr, CurveGroup,
 };
 use ark_ff::{Fp, Fp2, Fp2Config, FpConfig, PrimeField};
+use ark_relations::r1cs::{ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use num::{BigInt, BigUint, Integer, One, Signed};
-use num_modular::ModularUnaryOps;
+use num::BigUint;
 
 use crate::lego::{link::VK, VerifyingKey, VerifyingKeyWithLink};
-
-pub trait Mod<E: Clone + Integer> {
-    fn mod_exp(&self, e: &E, n: &Self) -> Self;
-
-    fn commit(b: &[&Self], e: &[&E], n: &Self) -> Self;
-}
-
-impl Mod<BigInt> for BigUint {
-    fn mod_exp(&self, e: &BigInt, n: &Self) -> Self {
-        if e.is_negative() {
-            self.invm(n).unwrap().modpow(e.magnitude(), n)
-        } else {
-            self.modpow(e.magnitude(), n)
-        }
-    }
-
-    fn commit(b: &[&Self], e: &[&BigInt], n: &Self) -> Self {
-        let mut c = Self::one();
-        for i in 0..b.len() {
-            c = c * b[i].mod_exp(e[i], n) % n;
-        }
-        c
-    }
-}
-
-impl Mod<BigUint> for BigUint {
-    fn mod_exp(&self, e: &BigUint, n: &Self) -> Self {
-        self.modpow(e, n)
-    }
-
-    fn commit(b: &[&Self], e: &[&BigUint], n: &Self) -> Self {
-        let mut c = Self::one();
-        for i in 0..b.len() {
-            c = c * b[i].mod_exp(e[i], n) % n;
-        }
-        c
-    }
-}
 
 pub trait OnChainVerifiable {
     fn to_on_chain_verifier(&self, name: &str) -> String;
@@ -203,22 +165,6 @@ impl<P: ToSolidity> ToSolidity for [P] {
     }
 }
 
-impl ToTransaction for BigInt {
-    fn to_tx(&self) -> String {
-        format!("[{},{}]", self.magnitude().to_tx(), self.is_negative())
-    }
-}
-
-impl ToTransaction for BigUint {
-    fn to_tx(&self) -> String {
-        format!(
-            "\"0x{:0>width$x}\"",
-            self,
-            width = (self.bits().next_multiple_of(&256) as usize) >> 2
-        )
-    }
-}
-
 impl<const N: usize, P: FpConfig<N>> ToSolidity for Fp<P, N> {
     fn to_sol_expr(&self) -> String {
         format!("{}", self.into_bigint())
@@ -292,4 +238,14 @@ where
         let bytes: Vec<u8> = serde_with::Bytes::deserialize_as(deserializer)?;
         T::deserialize_uncompressed_unchecked(&mut &bytes[..]).map_err(serde::de::Error::custom)
     }
+}
+
+pub fn num_constraints<E: PrimeField, F: FnOnce() -> Result<R, SynthesisError>, R>(
+    cs: &ConstraintSystemRef<E>,
+    f: F,
+) -> Result<usize, SynthesisError> {
+    let before = cs.num_constraints();
+    f()?;
+    let after = cs.num_constraints();
+    Ok(after - before)
 }

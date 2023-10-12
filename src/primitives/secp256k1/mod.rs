@@ -9,14 +9,24 @@ impl<F: PrimeField> HField<F> for ark_secp256k1::Affine {
     fn hash_to_field(&self, pp: &PoseidonParameters<F>) -> F {
         let (&x, &y) = self.xy().unwrap();
 
-        CRH::hash_vec(
+        CRH::hash(
             pp,
-            &x.into_bigint()
-                .to_bytes_le()
-                .chunks(16)
-                .chain(y.into_bigint().to_bytes_le().chunks(16))
-                .map(F::from_le_bytes_mod_order)
-                .collect::<Vec<_>>(),
+            CRH::hash_vec(
+                pp,
+                &x.into_bigint()
+                    .to_bytes_le()
+                    .chunks(16)
+                    .map(F::from_le_bytes_mod_order)
+                    .collect::<Vec<_>>(),
+            ),
+            CRH::hash_vec(
+                pp,
+                &y.into_bigint()
+                    .to_bytes_le()
+                    .chunks(16)
+                    .map(F::from_le_bytes_mod_order)
+                    .collect::<Vec<_>>(),
+            ),
         )
     }
 }

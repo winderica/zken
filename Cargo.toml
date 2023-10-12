@@ -13,13 +13,9 @@ ark-r1cs-std = { version = "0.4.0", features = ["parallel"] }
 ark-bn254 = { version = "0.4.0" }
 ark-secp256k1 = "0.4.0"
 ark-relations = { version = "0.4.0" }
+ark-snark = { version = "0.4.0" }
 rand = { version = "^0.8.0" }
 num = { version = "^0.4.0", features = ["rand", "serde"] }
-num-prime = "0.4.1"
-num-modular = "0.5.1"
-indoc = "1.0"
-ethers = { version = "1.0", features = ["ethers-solc", "abigen"] }
-tokio = { version = "1.20.1", features = ["macros"] }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.88"
 serde_with = "2.1.0"
@@ -27,7 +23,7 @@ rayon = "*"
 
 [dev-dependencies]
 ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", features = ["parallel", "print-trace"] }
-seq-macro = "0.3"
+# seq-macro = "0.3"
 
 [features]
 default = ["parallel"]
